@@ -1,0 +1,14 @@
+# Per-machine, never committed — the live server URL + API token.
+companion.local.json
+
+# The browser profile the companion runs in (live session cookies) and the
+# throwaway one extension/smoke-test.mjs wipes on every run.
+.companion-profile-chrome/
+.companion-profile-smoke/
+
+# Generated launcher shortcuts — they hard-code one machine's absolute path.
+*.lnk
+*.app/
+career-ops-companion.desktop
+
+node_modules/

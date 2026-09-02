@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Career-Ops Companion — Options</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px;
+      color: #1a1a1e; background: #fff; font-size: 14px; line-height: 1.5; }
+    @media (prefers-color-scheme: dark) { body { color: #ececf1; background: #1e1e24; } input { background: #2a2a32; color: #ececf1; border-color: #3a3a44 !important; } }
+    label { display: block; font-weight: 600; margin: 18px 0 4px; }
+    input { width: 100%; padding: 8px; border: 1px solid #d8d8e0; border-radius: 8px; font-size: 14px; box-sizing: border-box; }
+    label.check { font-weight: 400; margin: 14px 0 2px; }
+    label.check input { width: auto; margin-right: 8px; vertical-align: -1px; }
+    h3 { margin: 28px 0 0; font-size: 15px; }
+    button { margin-top: 18px; padding: 8px 18px; border-radius: 8px; border: 1px solid #5b53c7; background: #5b53c7; color: #fff; font-size: 14px; cursor: pointer; }
+    button.secondary { background: transparent; color: inherit; border-color: #d8d8e0; margin-left: 8px; }
+    #status { margin-top: 14px; min-height: 20px; }
+    .ok { color: #26a269; } .err { color: #c01c28; }
+    .hint { color: #6b6b76; font-size: 12.5px; margin-top: 4px; }
+    #source { margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: #f3f3f7; font-size: 12.5px; }
+    @media (prefers-color-scheme: dark) { #source { background: #2a2a32; } }
+  </style>
+</head>
+<body>
+  <h2>⚡ Career-Ops Companion</h2>
+  <p>Point the extension at your career-ops server. The token stays in this browser's extension storage and is only ever sent to the URL below.</p>
+  <p>Most people: create a token on your dashboard (<strong>Career → Companion → Create token</strong>) and paste the server URL + token in below. Self-hosting your own autopilot server instead? The setup script (<code>companion.cmd</code> / <code>node extension/setup-companion.mjs</code>) writes both values into <code>extension/companion.local.json</code> for you, and the extension imports that file by itself whenever it starts — so normally nothing needs typing here either way.</p>
+  <div id="source"></div>
+
+  <label for="baseUrl">Server URL</label>
+  <input id="baseUrl" type="url" placeholder="https://your-dashboard, or http://127.0.0.1:8788 if you self-host">
+  <div class="hint">Your dashboard's own origin (the companion talks to it at <code>/api/companion/*</code>) — or, self-hosting, wherever your autopilot server listens.</div>
+
+  <label for="token">API token</label>
+  <input id="token" type="password" placeholder="a token from Career → Companion, or server.token if you self-host">
+  <div class="hint">Create one on your dashboard's Career → Companion tab, or use <code>server.token</code> from your own autopilot config if you self-host.</div>
+
+  <h3>Automation</h3>
+  <label class="check"><input id="autoRun" type="checkbox"> Auto-fill when a page matches a queue item</label>
+  <div class="hint">On known ATS pages, the panel opens and fills by itself the moment the URL matches an active pipeline item. Submitting is always left to you. Manual triggers still work: the toolbar icon or <kbd>Alt+Shift+C</kbd>.</div>
+  <label class="check"><input id="autoDraft" type="checkbox"> Draft answers for open questions during a fill</label>
+  <div class="hint">Free-text questions with no stored answer get drafted by your local model and inserted for review.</div>
+  <label class="check"><input id="autoRunAll" type="checkbox"> Watch every site, not just known ATS hosts</label>
+  <div class="hint">Off by default. With this on, every page you load is checked against your queue — page URLs are only ever sent to your own server above.</div>
+  <label class="check"><input id="learnFields" type="checkbox"> Learn from forms I fill in</label>
+  <div class="hint">Remembers contact details you type on application forms, so they can be filled in for you next time. It never captures passwords or payment fields. Off by default, and nothing reaches your CV or profile without your OK.</div>
+
+  <button id="save">Save</button>
+  <button id="test" class="secondary">Test connection</button>
+  <button id="reload" class="secondary">Reload from setup file</button>
+  <div id="status"></div>
+</body>
+<script src="options.js"></script>
+</html>

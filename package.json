@@ -1,0 +1,32 @@
+{
+  "name": "career-autopilot",
+  "version": "2.1.0",
+  "description": "Career-Ops Companion — a browser extension that fills job application forms from your career-ops pipeline in your own browser. Never submits; you always click Submit.",
+  "private": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node extension/setup-companion.mjs --launch",
+    "companion": "node extension/dev-launch.mjs",
+    "test": "node tests/run.mjs"
+  },
+  "keywords": [
+    "job-search",
+    "browser-extension",
+    "chrome-extension",
+    "career",
+    "job-application",
+    "autofill"
+  ],
+  "author": "David Chui",
+  "license": "MIT",
+  "homepage": "https://github.com/farawayfound/career-autopilot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/farawayfound/career-autopilot"
+  },
+  "bugs": {
+    "url": "https://github.com/farawayfound/career-autopilot/issues"
+  }
+}

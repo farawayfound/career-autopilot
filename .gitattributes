@@ -1,0 +1,57 @@
+# Line-ending policy: LF in the repo and the working tree, on every platform.
+#
+# Without this file, each contributor's local core.autocrlf decides what gets
+# committed. That has already let one CRLF file into the index
+# (providers/jobspresso.mjs, renormalized alongside this file), and on a
+# default Windows checkout it turns any edited file into a whole-file
+# phantom diff. Explicit eol=lf keeps checkouts byte-identical everywhere;
+# bash entrypoints (cops) break outright under CRLF.
+
+* text=auto eol=lf
+
+# Source and config
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.go    text eol=lf
+*.sum   text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.tex   text eol=lf
+*.tsv   text eol=lf
+*.txt   text eol=lf
+*.svg   text eol=lf
+Dockerfile text eol=lf
+LICENSE    text eol=lf
+VERSION    text eol=lf
+cops       text eol=lf
+
+# Binary assets — never normalized
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff2 binary
+*.pdf   binary
+
+# Fork additions below. The rules above already force eol=lf for everything
+# (auto-detected text) or by extension, so the two blocks below only need to
+# exist where they either forcibly mark a path as text regardless of
+# git's content-based auto-detection, or override the blanket LF policy.
+# Line order matters here: gitattributes lets a later line win per-attribute,
+# so these must stay after the general rules above.
+
+# fleet deploy scripts run on Linux/macOS or get scp-ed raw - keep LF everywhere
+deploy/fleet/** text eol=lf
+.github/workflows/*.yml text eol=lf
+
+# Double-clickable launchers. The .command runs on macOS/Linux, where a CRLF
+# shebang is a "bad interpreter" error, and the .cmd is opened by Windows
+# shell - pin both so a checkout on any OS stays executable.
+companion.command text eol=lf
+companion.cmd text eol=crlf

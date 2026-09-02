@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Career-Ops Companion",
+  "version": "0.3.0",
+  "description": "Fills job application forms from your career-ops pipeline: auto-fill where possible, click-to-insert and copy everywhere else, AI assist for custom questions. Never submits — you always click Submit.",
+  "permissions": ["storage", "scripting", "activeTab", "webNavigation"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "sw.js" },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Career-Ops Companion — open the fill panel",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": { "default": "Alt+Shift+C" },
+      "description": "Toggle the Career-Ops fill panel on this page"
+    }
+  }
+}
