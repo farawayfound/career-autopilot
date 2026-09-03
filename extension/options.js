@@ -36,7 +36,12 @@ async function describeSource({ baseUrl, token, bundledFingerprint }) {
 
 async function load() {
   const cfg = await chrome.storage.local.get({
-    baseUrl: '', token: '', autoRun: true, autoDraft: true, autoRunAll: false, learnFields: false, bundledFingerprint: '',
+    // autoDraft defaults to false for a FRESH install (this default only ever
+    // applies when the key is absent from storage — chrome.storage.local.get
+    // never overwrites an existing value with its default) — drafting is now
+    // a deliberate AI-tab button, never automatic, so a fresh profile should
+    // not carry a stale "on" default forward. See options.html's copy.
+    baseUrl: '', token: '', autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false, bundledFingerprint: '',
   });
   $('baseUrl').value = cfg.baseUrl;
   $('token').value = cfg.token;

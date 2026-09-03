@@ -18,6 +18,7 @@
 import { pass, fail, warn, ROOT } from './helpers.mjs';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 
 console.log('\ncompanion extension — fill guards and frame trust');
 
@@ -60,6 +61,27 @@ function extractConst(source, name) {
   const m = source.match(re);
   if (!m) throw new Error(`const ${name} not found in source`);
   return m[0].trim();
+}
+
+/**
+ * Slice a (possibly multi-line) `const name = <array or object literal>;`
+ * out of source by bracket-depth matching — extractConst's single-line regex
+ * cannot see past the first newline, which every array/object literal this
+ * file needs to extract (US_STATES, SYNONYM_GROUPS, ATS_PACKS) spans.
+ */
+function extractMultilineConst(source, name) {
+  const marker = `const ${name} = `;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`const ${name} not found in source`);
+  let depth = 0;
+  let i = start + marker.length;
+  for (; i < source.length; i += 1) {
+    const c = source[i];
+    if ('[{('.includes(c)) depth += 1;
+    else if ('}])'.includes(c)) depth -= 1;
+    else if (c === ';' && depth <= 0) break;
+  }
+  return source.slice(start, i + 1);
 }
 
 // ── stub DOM ────────────────────────────────────────────────────────────────
@@ -186,7 +208,7 @@ const { setEnv, alreadyAnswered, frameTrusted, looksLikeSubmit, ATS_HOST_RE, CON
 {
   // Every broadcast that fills, attaches, or harvests must be scoped unless it
   // is a per-row escape hatch the candidate aimed themselves.
-  const scoped = ['companion:runFill', 'companion:collectQuestions', 'companion:fillByLabel'];
+  const scoped = ['companion:runFill', 'companion:collectQuestions', 'companion:fillByLabel', 'companion:harvest', 'companion:applyLiveFill'];
   for (const type of scoped) {
     const sites = [...COMPANION.matchAll(new RegExp(`broadcast\\(\\{ type: '${type}'[^\\n]*`, 'g'))].map((m) => m[0]);
     ok(sites.length > 0 && sites.every((s) => s.includes('autoScope')),
@@ -195,6 +217,9 @@ const { setEnv, alreadyAnswered, frameTrusted, looksLikeSubmit, ATS_HOST_RE, CON
   const attaches = [...COMPANION.matchAll(/broadcast\(\{ type: 'companion:attachResume'[^\n]*/g)].map((m) => m[0]);
   ok(attaches.length === 3 && attaches.filter((s) => s.includes('autoScope')).length === 2,
     'attachResume: the two automatic call sites are scoped, the manual Attach button stays ungated');
+  const coverAttaches = [...COMPANION.matchAll(/broadcast\(\{ type: 'companion:attachCoverLetter'[^\n]*/g)].map((m) => m[0]);
+  ok(coverAttaches.length === 3 && coverAttaches.filter((s) => s.includes('autoScope')).length === 2,
+    'attachCoverLetter: the same shape as attachResume — two automatic call sites scoped, the manual Attach button ungated');
 
   ok(/if \(msg\.strict && !frameTrusted\(msg\.topHost\)\) return;/.test(COMPANION),
     'engine honours the strict flag by standing down in untrusted frames');
@@ -661,4 +686,307 @@ const IN_PRIVATE_REPO = existsSync(join(ROOT, 'deploy'));
         'a corrupt file counts as no file, never throws');
     }
   })();
+}
+
+// ── best-guess selection: pickOption + labelMatcher + diceCoefficient ──────
+// (items #1/#2 — the companion overhaul.) Pure functions, no DOM needed.
+{
+  const pureSource = `
+${extractConst(COMPANION, 'clean')}
+${extractConst(COMPANION, 'escRe')}
+${extractFunction(COMPANION, 'diceCoefficient')}
+${extractMultilineConst(COMPANION, 'US_STATES')}
+${extractMultilineConst(COMPANION, 'SYNONYM_GROUPS')}
+${extractFunction(COMPANION, 'pickOption')}
+${extractFunction(COMPANION, 'labelMatcher')}
+export { pickOption, labelMatcher, diceCoefficient };
+`;
+  const { pickOption, labelMatcher, diceCoefficient } =
+    await import(`data:text/javascript;base64,${Buffer.from(pureSource, 'utf8').toString('base64')}`);
+
+  // rung 1: exact (case/whitespace-insensitive)
+  ok(pickOption(['Yes', 'No'], 'yes').value === 'Yes' && pickOption(['Yes', 'No'], 'yes').exact === true,
+    'pickOption: exact case-insensitive match');
+  // rung 2: normalized equality after stripping punctuation/parentheticals
+  ok(pickOption(['Bachelors degree'], "Bachelor's Degree").exact === true,
+    'pickOption: punctuation-stripped equality counts as exact');
+  ok(pickOption(['Male (M)'], 'Male').value === 'Male (M)' && pickOption(['Male (M)'], 'Male').exact === true,
+    'pickOption: a parenthetical on the OPTION side is stripped before comparing');
+  // rung 3: synonym groups
+  {
+    const r = pickOption(['I am not a protected veteran', 'I identify as one or more of the classifications of a protected veteran'], 'No');
+    ok(r && r.value === 'I am not a protected veteran' && r.exact === false,
+      'pickOption: CC-305 veteran-status synonym group resolves a bare "No" to the full legal phrasing, flagged non-exact');
+  }
+  {
+    const r = pickOption(['Yes, I have a disability', 'No, I do not have a disability'], 'No');
+    ok(r && r.value === 'No, I do not have a disability' && r.exact === false,
+      'pickOption: CC-305 disability-status synonym group');
+  }
+  ok(pickOption(['Colorado', 'California'], 'CO').value === 'Colorado',
+    'pickOption: a US state ABBREVIATION resolves to its full option-list name via the synonym table');
+  ok(pickOption(['United States', 'Canada'], 'USA').value === 'United States',
+    'pickOption: country synonym group (USA -> United States)');
+  // rung 4: Dice coefficient >= 0.5
+  {
+    const r = pickOption(['Senior Software Engineer', 'Junior Analyst'], 'Sr. Software Engineer');
+    ok(r && r.value === 'Senior Software Engineer' && r.exact === false,
+      'pickOption: a close-but-not-exact title resolves via Dice similarity, flagged non-exact');
+  }
+  ok(pickOption(['Apples', 'Oranges'], 'Bicycle') === null,
+    'pickOption: nothing close enough on any rung -> null (never a wild guess)');
+  // rung 5: "how did you hear" ranked default — gated on the QUESTION text
+  {
+    const opts = ['Employee Referral', 'LinkedIn', 'Indeed', 'Other'];
+    const r = pickOption(opts, 'Word of mouth', { question: 'How did you hear about us?' });
+    ok(r && r.value === 'LinkedIn' && r.exact === false,
+      'pickOption: an unrecognisable how-heard answer falls back to the ranked default (LinkedIn first)');
+    ok(pickOption(opts, 'Word of mouth', { question: 'What is your favorite color?' }) === null,
+      'pickOption: the ranked-default rung ONLY fires for a how-did-you-hear-shaped question — never a general fallback');
+  }
+  ok(pickOption([], 'Yes') === null, 'pickOption: no options -> null');
+  ok(pickOption(['Yes'], null) === null, 'pickOption: no answer -> null');
+
+  ok(diceCoefficient('night', 'nacht') < 0.3 && diceCoefficient('same', 'same') === 1,
+    'diceCoefficient: identical strings score 1, dissimilar strings score low');
+
+  // labelMatcher: \b-anchored — the §5.1b fix for the real, shipped
+  // findByLabel/canned-loop regex-building bug (bare 'city'/'state'/'race'
+  // matching as a SUBSTRING inside "capacity"/"statement"/"embrace"). Every
+  // fixture below is chosen so the target word is genuinely absent as its
+  // own token — "race condition" is deliberately NOT here: it contains
+  // "race" as a real standalone word, so \b-anchored matching is SUPPOSED
+  // to fire on it (the correct, safer direction), not a counterexample.
+  const adversarial = [
+    ['city', 'capacity constraints apply'],
+    ['state', 'please read this statement'],
+    ['state', 'United States of America'],
+    ['race', 'please embrace our values'],
+    ['ethnicity', 'velocity of delivery'],
+  ];
+  for (const [word, text] of adversarial) {
+    ok(labelMatcher([word]).test(text) === false,
+      `labelMatcher(['${word}']) does not fire on unrelated text containing it as a substring: "${text}"`);
+  }
+  ok(labelMatcher(['city']).test('City') === true, 'labelMatcher: still matches the real word it was built for');
+  ok(labelMatcher(['race', 'ethnicity']).test('Race / Ethnicity') === true,
+    'labelMatcher: still matches a real multi-word label');
+  ok(labelMatcher(['race']).test('a race condition in the scheduler') === true,
+    'labelMatcher: correctly DOES match when the word is a genuine standalone token, even in an unrelated sentence (word-boundary anchoring is not a blacklist of contexts)');
+}
+
+// ── findByLabel adopts labelMatcher (the fix applied to EXISTING code) ─────
+{
+  const findByLabelSrc = extractFunction(COMPANION, 'findByLabel');
+  ok(/labelMatcher\(\[pattern\]\)/.test(findByLabelSrc),
+    'findByLabel builds its single-key regex through labelMatcher, not a bare new RegExp(escRe(...))');
+  ok(!/new RegExp\(escRe\(pattern\)/.test(findByLabelSrc),
+    'findByLabel no longer builds an unanchored regex from a plain key string');
+  const cannedLoop = COMPANION.slice(COMPANION.indexOf('for (const canned of plan.canned'), COMPANION.indexOf('return results;\n  }'));
+  ok(/labelMatcher\(canned\.match/.test(cannedLoop),
+    'the canned loop builds its regex through labelMatcher too (was a bare alternation with no word boundaries)');
+}
+
+// ── item #4: home-address vs work-location guards, mirrored byte-for-byte ──
+// The byte-parity-against-the-REAL-autopilot-export half only runs inside
+// the private repo: the public export (deploy/public/career-autopilot.yml)
+// ships this file standalone with extension/ + a handful of lib/ helpers —
+// autopilot/lib/{field-taxonomy,profile-questions}.mjs is never part of that
+// payload, so importing it here would crash the exported copy outright
+// (ERR_MODULE_NOT_FOUND), the same reason the icon-file check a few blocks up
+// downgrades to a warning rather than a hard import. The structural checks
+// (the guard is actually wired into runFill, not just present as dead code)
+// still run everywhere — they read companion.js alone.
+{
+  if (IN_PRIVATE_REPO) {
+    const taxonomy = await import(pathToFileURL(join(ROOT, 'autopilot', 'lib', 'field-taxonomy.mjs')).href);
+    const profileQuestions = await import(pathToFileURL(join(ROOT, 'autopilot', 'lib', 'profile-questions.mjs')).href);
+
+    const coHomeIds = JSON.parse(COMPANION.match(/const HOME_ADDRESS_IDS = (\[[^\]]*\]);/)[1].replace(/'/g, '"'));
+    ok(JSON.stringify(coHomeIds) === JSON.stringify(taxonomy.HOME_ADDRESS_IDS),
+      'companion.js mirror: HOME_ADDRESS_IDS is byte-identical to field-taxonomy.mjs\'s real export');
+
+    const coWorkLocRe = COMPANION.match(/const WORK_LOCATION_LABEL_RE = (\/.*\/i);/)[1];
+    ok(coWorkLocRe === `/${taxonomy.WORK_LOCATION_LABEL_RE.source}/${taxonomy.WORK_LOCATION_LABEL_RE.flags}`,
+      'companion.js mirror: WORK_LOCATION_LABEL_RE is byte-identical to field-taxonomy.mjs\'s real export');
+
+    const coSensitiveRe = COMPANION.match(/const SENSITIVE_QUESTION_LABEL_RE = (\/.*\/i);/)[1];
+    ok(coSensitiveRe === `/${profileQuestions.SENSITIVE_QUESTION_LABEL_RE.source}/${profileQuestions.SENSITIVE_QUESTION_LABEL_RE.flags}`,
+      'companion.js mirror: SENSITIVE_QUESTION_LABEL_RE is byte-identical to profile-questions.mjs\'s real export (regenerate the literal in companion.js whenever the catalog\'s sensitive:true set changes)');
+  } else {
+    warn('not in the private repo (autopilot/ is not part of the public export) — HOME_ADDRESS_IDS/WORK_LOCATION_LABEL_RE/SENSITIVE_QUESTION_LABEL_RE byte-parity skipped; tests/companion-field-memory.test.mjs (private-repo-only) covers the same parity');
+  }
+
+  // The guard is actually WIRED into the fields/learned loops, not just
+  // present as an unused constant — this half needs only companion.js, so it
+  // runs in every context, exported or not.
+  ok(/const excludeRe = HOME_ADDRESS_IDS\.includes\(field\.id\) \? WORK_LOCATION_LABEL_RE : null;/.test(COMPANION),
+    'runFill\'s fields loop excludes work-location-labeled controls from a home-address field\'s fallback match');
+  ok(/const excludeRe = HOME_ADDRESS_IDS\.includes\(entry\.key\) \? WORK_LOCATION_LABEL_RE : null;/.test(COMPANION),
+    'runFill\'s learned-fields loop applies the identical guard');
+}
+
+// ── item #3: cover-letter attachment never fights the resume input ────────
+{
+  const findCoverSrc = extractFunction(COMPANION, 'findCoverLetterInput');
+  const findResumeRawSrc = extractFunction(COMPANION, 'findResumeInputRaw');
+  const findResumeSrc = extractFunction(COMPANION, 'findResumeInput');
+  ok(/COVER_LETTER_RE/.test(findCoverSrc), 'findCoverLetterInput scans label/accept/nearby text for cover-letter phrasing');
+  ok(/findResumeInputRaw\(\)/.test(findCoverSrc),
+    'findCoverLetterInput\'s generic fallback compares against the OLD unguarded resume lookup, not a mutually-recursive call to findResumeInput');
+  ok(/const cover = findCoverLetterInput\(\);/.test(findResumeSrc) && /el !== cover/.test(findResumeSrc),
+    'findResumeInput excludes whatever findCoverLetterInput claims');
+  ok(findResumeRawSrc.length > 0, 'findResumeInputRaw (the pre-fix logic, kept private) still exists');
+
+  // Drive the two real functions against a minimal stub DOM: two file inputs,
+  // one clearly labelled as a cover letter, on a host that matches no
+  // ATS_PACKS entry (so only the generic label-matching path runs).
+  const domSource = `
+let hostname = 'careers.example.com';
+const location = { get hostname() { return hostname; } };
+const CSS = { escape: (s) => String(s).replace(/["\\\\]/g, '\\\\$&') };
+let fileInputs = [];
+const document = {
+  querySelectorAll(sel) { return sel === 'input[type="file"]' ? fileInputs : []; },
+  querySelector(sel) { return sel === 'input[type="file"]' ? (fileInputs[0] || null) : null; },
+};
+export const setFiles = (list) => { fileInputs = list; };
+${extractConst(COMPANION, 'clean')}
+${extractFunction(COMPANION, 'labelFor')}
+const visible = (el) => el && el.offsetParent !== null && !el.disabled;
+${extractMultilineConst(COMPANION, 'ATS_PACKS')}
+${extractConst(COMPANION, 'atsPack')}
+${extractConst(COMPANION, 'COVER_LETTER_RE')}
+${extractFunction(COMPANION, 'findCoverLetterInput')}
+${extractFunction(COMPANION, 'findResumeInputRaw')}
+${extractFunction(COMPANION, 'findResumeInput')}
+export { findCoverLetterInput, findResumeInput };
+`;
+  const { setFiles, findCoverLetterInput, findResumeInput } =
+    await import(`data:text/javascript;base64,${Buffer.from(domSource, 'utf8').toString('base64')}`);
+
+  const fileEl = (id, ariaLabel) => ({
+    tagName: 'INPUT', type: 'file', id, offsetParent: {}, disabled: false,
+    getAttribute: (k) => ({ 'aria-label': ariaLabel || '' }[k] ?? null),
+    labels: [],
+    closest: () => null,
+  });
+
+  const resumeInput = fileEl('resume-file', 'Resume');
+  const coverInput = fileEl('cover-file', 'Cover Letter (optional)');
+  setFiles([resumeInput, coverInput]);
+  const cover = findCoverLetterInput();
+  const resume = findResumeInput();
+  ok(cover === coverInput, 'findCoverLetterInput picks the input whose own label mentions "cover letter"');
+  ok(resume === resumeInput, 'findResumeInput picks the OTHER input');
+  ok(cover !== resume, 'findCoverLetterInput and findResumeInput never agree on the same input');
+
+  // Only ONE file input, no cover-letter signal anywhere — the sole input is
+  // presumably the resume; findCoverLetterInput must not also claim it.
+  const onlyInput = fileEl('only-file', '');
+  setFiles([onlyInput]);
+  ok(findCoverLetterInput() === null, 'findCoverLetterInput returns null when there is only one, unlabelled file input');
+  ok(findResumeInput() === onlyInput, 'findResumeInput still resolves the sole input as the resume');
+}
+
+// ── item #7: panel drag clamps to the viewport at every extreme ───────────
+{
+  const clampSrc = extractFunction(COMPANION, 'clampToViewport');
+  const src = `
+const window = { innerHeight: 0, innerWidth: 0 };
+export const setViewport = (h, w) => { window.innerHeight = h; window.innerWidth = w; };
+${clampSrc}
+export { clampToViewport };
+`;
+  const { setViewport, clampToViewport } =
+    await import(`data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`);
+
+  setViewport(900, 1600);
+  ok(JSON.stringify(clampToViewport(-50, -50)) === JSON.stringify({ top: 0, left: 0 }),
+    'clampToViewport: negative coordinates clamp to the top-left corner');
+  ok(JSON.stringify(clampToViewport(10000, 10000)) === JSON.stringify({ top: 860, left: 1540 }),
+    'clampToViewport: coordinates past the viewport clamp so the header stays grabbable (40px/60px reserved)');
+  ok(JSON.stringify(clampToViewport(200, 300)) === JSON.stringify({ top: 200, left: 300 }),
+    'clampToViewport: an in-bounds position passes through unchanged');
+  setViewport(20, 20); // a viewport smaller than the panel's own reserved margins
+  ok(JSON.stringify(clampToViewport(500, 500)) === JSON.stringify({ top: 0, left: 0 }),
+    'clampToViewport: never produces a negative clamp bound even on a tiny viewport');
+}
+
+// ── AI tab button gating (paid-tier / daily-cap disabling, never hiding) ──
+{
+  const gates = extractFunction(COMPANION, 'paintFeatureGates');
+  ok(/co-livefill/.test(gates) && /live\.disabled = !allowed \|\| capped;/.test(gates),
+    'paintFeatureGates disables (never removes) the Live-fill button when the tier or the cap says no');
+  ok(/paid-plan feature — ask the admin to upgrade your tier/.test(gates),
+    'a disabled Live-fill button states WHY, not just that it is off');
+  ok(/co-draftq/.test(gates) && /draft\.disabled = capped;/.test(gates),
+    'paintFeatureGates disables Draft-open-questions on a spent daily cap');
+  ok(/co-process/.test(gates) && /paid-plan feature — ask the admin to upgrade your access/.test(gates),
+    'the header\'s Process-this-page button is gated the same way, with its own stated reason');
+
+  // Drive the real, extracted function against a stubbed `root`/`plan` for
+  // each tier row, rather than trusting the regex checks above alone —
+  // `plan` is a module-scope closure variable in the shipped source (not a
+  // parameter), so the harness declares it the same way and reassigns it
+  // per case.
+  const gateHarness = `
+let plan = null;
+const buttons = {
+  'co-process': { disabled: false, title: '' },
+  'co-livefill': { disabled: false, title: '' },
+  'co-draftq': { disabled: false, title: '' },
+};
+const root = { getElementById: (id) => buttons[id] || null };
+export const setPlan = (p) => { plan = p; };
+export const getButtons = () => buttons;
+${gates}
+export { paintFeatureGates };
+`;
+  const { setPlan, getButtons, paintFeatureGates } =
+    await import(`data:text/javascript;base64,${Buffer.from(gateHarness, 'utf8').toString('base64')}`);
+
+  const tierRow = (features, usage) => { setPlan({ features, usage }); paintFeatureGates(); return getButtons(); };
+
+  {
+    const b = tierRow({ live_fill: true, process_page: true, generate_message: true, auto_draft: true },
+      { live_fills: { remaining: 33 }, drafts: { remaining: 195 } });
+    ok(b['co-livefill'].disabled === false && b['co-process'].disabled === false && b['co-draftq'].disabled === false,
+      'admin/paid row: every AI-tab and header button is enabled');
+    ok(/33 left today/.test(b['co-livefill'].title), 'the Live-fill tooltip states the remaining count');
+  }
+  {
+    const b = tierRow({ live_fill: false, process_page: false, generate_message: false, auto_draft: true },
+      { live_fills: { remaining: 0 }, drafts: { remaining: 10 } });
+    ok(b['co-livefill'].disabled === true && b['co-process'].disabled === true,
+      'free-tier row: Live fill and Process this page are both disabled');
+    ok(/paid-plan feature/.test(b['co-livefill'].title) && /paid-plan feature/.test(b['co-process'].title),
+      'both disabled buttons state the paid-plan reason, not the daily-cap reason (the tier is what is blocking, not the cap)');
+  }
+  {
+    const b = tierRow({ live_fill: true, process_page: true, generate_message: false, auto_draft: true },
+      { live_fills: { remaining: 0 }, drafts: { remaining: 0 } });
+    ok(b['co-livefill'].disabled === true && /limit reached/.test(b['co-livefill'].title),
+      'paid tier but the daily cap is spent: Live fill disables with the CAP reason, not the tier reason');
+    ok(b['co-draftq'].disabled === true && /limit reached/.test(b['co-draftq'].title),
+      'Draft open questions disables the same way once its own daily cap is spent');
+    ok(b['co-process'].disabled === false, 'Process this page has no daily cap of its own — stays enabled');
+  }
+  {
+    const b = tierRow(null, null);
+    ok(b['co-process'].disabled === false, 'no plan loaded yet: Process this page defaults to enabled (never disabled by the absence of data)');
+  }
+}
+
+// ── deliberate-AI rule: Fill never triggers a model call ───────────────────
+{
+  const fillEverythingSrc = extractFunction(COMPANION, 'fillEverything');
+  ok(!/autoDraft/.test(fillEverythingSrc) && !/getDraft/.test(fillEverythingSrc) && !/liveFill/i.test(fillEverythingSrc),
+    'fillEverything() (auto-run AND the ⚡ button) never calls drafting or live-fill — Fill is deterministic-only');
+  const autorunHandler = COMPANION.slice(
+    COMPANION.indexOf("panelBus['companion:autorun']"),
+    COMPANION.indexOf("panelBus['companion:frameAdded']"),
+  );
+  ok(/fillEverything\(\{ auto: true \}\)/.test(autorunHandler) && !/fillLive\(/.test(autorunHandler),
+    'the auto-run handler (incl. its relink branch) calls only the deterministic fill, never fillLive — the AI tab\'s own click is the only way to trigger it');
 }

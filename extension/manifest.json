@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Career-Ops Companion",
-  "version": "0.3.0",
-  "description": "Fills job application forms from your career-ops pipeline: auto-fill where possible, click-to-insert and copy everywhere else, AI assist for custom questions. Never submits — you always click Submit.",
+  "version": "0.4.0",
+  "description": "Fills job application forms from your career-ops pipeline: auto-fill where possible, click-to-insert and copy everywhere else, an AI tab for live-fill and drafted answers (every call is a deliberate click). Never submits — you always click Submit.",
   "permissions": ["storage", "scripting", "activeTab", "webNavigation"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "sw.js" },

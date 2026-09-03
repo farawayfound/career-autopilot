@@ -7,14 +7,20 @@ const getConfig = () =>
   chrome.storage.local.get({ baseUrl: '', token: '' });
 
 // Behaviour toggles (options.html). autoRun: when a page matches an active
-// queue item, open the panel and fill without a click. autoDraft: during a
-// fill, also draft answers for open free-text questions. autoRunAll: watch
-// every site for matches, not just known ATS hosts. learnFields: remember
-// values the candidate types or confirms on application forms, so they can
-// be prefilled next time. Default OFF — deliberately opt-in, since this
-// reads personal data off forms the candidate fills in themselves.
+// queue item, open the panel and fill without a click — deterministic only,
+// per the deliberate-AI rule; it never triggers a model call. autoDraft:
+// LEGACY, no longer read by companion.js's fillEverything — drafting moved
+// to the AI tab's own explicit "Draft open questions" button so no inference
+// call ever fires without a click. Kept in storage/options only so an
+// existing install's value round-trips; its default flips true→false for a
+// FRESH install only (getSettings' default here is never applied over an
+// already-stored value). autoRunAll: watch every site for matches, not just
+// known ATS hosts. learnFields: remember values the candidate types or
+// confirms on application forms, so they can be prefilled next time. Default
+// OFF — deliberately opt-in, since this reads personal data off forms the
+// candidate fills in themselves.
 const getSettings = () =>
-  chrome.storage.local.get({ autoRun: true, autoDraft: true, autoRunAll: false, learnFields: false });
+  chrome.storage.local.get({ autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false });
 
 // ── configuration: the setup file ───────────────────────────────────────────
 // api() reads storage, but storage starts empty in every profile that loads
@@ -114,10 +120,13 @@ async function api(path, { method = 'GET', body = null, retried = false } = {}) 
     if (res.status === 401 && !retried && (await importBundledConfig({ rejected: true })).imported) {
       return api(path, { method, body, retried: true });
     }
-    if (path.includes('/resume')) {
-      if (!res.ok) return { ok: false, error: `resume fetch failed (${res.status})` };
+    // Both binary downloads (resume, and item #3's cover-letter PDF) share
+    // this shape: base64-encode over the message channel, decode in the
+    // content script that actually attaches/downloads the file.
+    if (path.includes('/resume') || path.includes('/cover-letter')) {
+      const label = path.includes('/cover-letter') ? 'cover letter' : 'resume';
+      if (!res.ok) return { ok: false, error: `${label} fetch failed (${res.status})` };
       const buf = await res.arrayBuffer();
-      // Messages are JSON — ship bytes as base64, decode in the content script.
       let binary = '';
       const bytes = new Uint8Array(buf);
       const CHUNK = 0x8000;
@@ -125,7 +134,7 @@ async function api(path, { method = 'GET', body = null, retried = false } = {}) 
         binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
       }
       const disposition = res.headers.get('content-disposition') || '';
-      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || 'Resume.pdf';
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || (label === 'cover letter' ? 'CoverLetter.pdf' : 'Resume.pdf');
       return { ok: true, b64: btoa(binary), filename, mime: res.headers.get('content-type') || 'application/pdf' };
     }
     const data = await res.json().catch(() => ({}));
@@ -167,8 +176,49 @@ const markAutoRan = async (tabId, url) => {
   await sessionSet('autoRan', map);
 };
 
+// Same host-family test companion.js's frameTrusted/maybeAutoRun logic uses —
+// duplicated here for the same reason TAXONOMY/CONFIRM_RE are duplicated (no
+// module system to share it from).
+const registrable = (h) => String(h || '').toLowerCase().split('.').slice(-2).join('.');
+
+// ── multi-page linking (items 6/8) ──────────────────────────────────────────
+// A tab, once linked to a queue item (by an explicit item= plan load, or the
+// Link button), stays linked across every navigation on that tab — the fix
+// for "Continue applications remain highly manual". `host` is the origin the
+// link was made on, so a later navigation can tell "still this application"
+// (same registrable domain, or still ATS-like) from "left for an unrelated
+// site" without re-deriving it from the item itself.
+const tabLinkOf = async (tabId) => (await sessionGet('tabLink', {}))[tabId] || null;
+const setTabLink = async (tabId, item, host) => {
+  const m = await sessionGet('tabLink', {});
+  m[tabId] = { item, host: host || '', since: Date.now() };
+  await sessionSet('tabLink', m);
+};
+// Clearing the link also clears the per-tab "live-fill next steps" tick —
+// the tick's whole meaning is "for the rest of THIS linked application", so
+// it cannot outlive the link itself without becoming a stale, silently-armed
+// setting on whatever gets linked next.
+const clearTabLink = async (tabId) => {
+  const m = await sessionGet('tabLink', {});
+  delete m[tabId];
+  await sessionSet('tabLink', m);
+  await setLiveFillNextSteps(tabId, false);
+};
+const panelOpenOf = async (tabId) => Boolean((await sessionGet('panelOpen', {}))[tabId]);
+const setPanelOpenState = async (tabId, open) => {
+  const m = await sessionGet('panelOpen', {});
+  if (open) m[tabId] = true; else delete m[tabId];
+  await sessionSet('panelOpen', m);
+};
+const liveFillNextStepsOf = async (tabId) => Boolean((await sessionGet('liveFillNextSteps', {}))[tabId]);
+const setLiveFillNextSteps = async (tabId, value) => {
+  const m = await sessionGet('liveFillNextSteps', {});
+  if (value) m[tabId] = true; else delete m[tabId];
+  await sessionSet('liveFillNextSteps', m);
+};
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit']) {
+  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit', 'tabLink', 'panelOpen', 'liveFillNextSteps']) {
     const map = await sessionGet(key, {});
     if (tabId in map) { delete map[tabId]; await sessionSet(key, map); }
   }
@@ -224,6 +274,43 @@ async function maybeAutoRun(tabId, url) {
   if (inflight.has(claim)) return;
   inflight.add(claim);
   try {
+    // Multi-page relink (items 6/8), checked BEFORE the ordinary URL-match
+    // gate below: a tab already linked to a queue item re-fetches THAT
+    // item's plan on every navigation, so a Continue/next-step page never
+    // asks the candidate to re-link. This is independent of autoRun/
+    // autoRunAll — once a candidate has linked a page (deliberately, or via
+    // the URL-match gate once), later steps of the SAME application keep
+    // filling regardless of those settings, the same way a manually opened
+    // panel would.
+    const link = await tabLinkOf(tabId);
+    if (link && link.item) {
+      let stillLinked = hostMatches(url);
+      if (!stillLinked) {
+        try { stillLinked = registrable(new URL(url).hostname) === registrable(link.host); } catch { stillLinked = false; }
+      }
+      if (stillLinked) {
+        const plan = await api(`/api/companion/plan?url=${encodeURIComponent(url)}&item=${encodeURIComponent(link.item)}`);
+        if (plan && plan.ok && plan.mode === 'item') {
+          await injectCompanion(tabId);
+          const reopen = await panelOpenOf(tabId);
+          await chrome.tabs.sendMessage(tabId, { type: 'companion:autorun', relink: true, item: link.item, reopen }, { frameId: 0 }).catch(() => {});
+          return;
+        }
+        // A 404 means the item itself is gone (deleted, or no longer owned
+        // by this actor) — clear the stale link and fall through to a fresh
+        // URL match below. Anything else (server unreachable, a timeout) is
+        // treated as transient: keep the link and retry on the NEXT
+        // navigation, rather than re-linking to a possibly WRONG item mid-
+        // application just because this one request failed.
+        if (plan && plan.status === 404) await clearTabLink(tabId);
+        else return;
+      }
+      // The tab left both the ATS-host pattern and the linked item's own
+      // registrable domain — the link no longer describes what is on
+      // screen, so it is cleared and this navigation falls through to the
+      // ordinary URL-match gate below like an unlinked tab.
+      await clearTabLink(tabId);
+    }
     const { autoRun, autoRunAll } = await getSettings();
     if (!autoRun) return;
     if (await autoRanUrl(tabId) === url) return;
@@ -304,6 +391,7 @@ async function reportApplied(tabId, item, evidence) {
   const done = await sessionGet('appliedItems', {});
   if (done[item]) {
     await clearPendingSubmit(tabId);
+    if (tabId != null) await clearTabLink(tabId);
     return { ok: true, already_reported: true };
   }
   const res = await api('/api/companion/submitted', {
@@ -333,6 +421,10 @@ async function reportApplied(tabId, item, evidence) {
     return res || { ok: false, error };
   }
   await clearPendingSubmit(tabId);
+  // A submitted application should not keep re-filling if the tab is
+  // reopened or the candidate navigates back — the link (and its per-tab
+  // live-fill-next-steps tick) is cleared the moment a submit is confirmed.
+  if (tabId != null) await clearTabLink(tabId);
   done[item] = true;
   await sessionSet('appliedItems', done);
   try {
@@ -426,15 +518,112 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg.type) {
       // Panel → backend
-      case 'companion:getPlan':
-        sendResponse(await api(`/api/companion/plan?url=${encodeURIComponent(msg.url || '')}${msg.item ? `&item=${encodeURIComponent(msg.item)}` : ''}`));
+      case 'companion:getPlan': {
+        // title/h1/company (item #8): hints for the plan route's
+        // rankCandidates() when no hard URL match exists, sent by the panel
+        // from quickPageHints() — never sent alongside an explicit item id
+        // (loadPlan only computes them for an itemless load).
+        const params = new URLSearchParams({ url: msg.url || '' });
+        if (msg.item) params.set('item', msg.item);
+        if (msg.title) params.set('title', msg.title);
+        if (msg.h1) params.set('h1', msg.h1);
+        if (msg.company) params.set('company', msg.company);
+        sendResponse(await api(`/api/companion/plan?${params.toString()}`));
         break;
+      }
       case 'companion:getDraft':
         sendResponse(await api('/api/companion/draft', { method: 'POST', body: { questions: msg.questions, item: msg.item || null } }));
         break;
       case 'companion:getResume':
         sendResponse(await api(`/api/companion/resume${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));
         break;
+      // Item #3's fetch half — a real cover-letter PDF, same binary shape as
+      // getResume (api() routes both through its /resume-or-cover-letter
+      // binary branch below).
+      case 'companion:getCoverLetter':
+        sendResponse(await api(`/api/companion/cover-letter${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));
+        break;
+      // Item #8's explicit "link this page" path — the cross-session case
+      // (a browser restart clears chrome.storage.session's own tabLink; the
+      // URL alone, maybe now on a later Continue step, has to re-find the
+      // item via the server's stored link_aliases next time).
+      case 'companion:link':
+        sendResponse(await api('/api/companion/link', { method: 'POST', body: { item: msg.item, url: msg.url } }));
+        break;
+      // Live fill (item #11) — the ONE route that ever calls a model without
+      // the candidate reviewing every field first; gated server-side on tier
+      // and the daily cap, never here.
+      case 'companion:liveFill':
+        sendResponse(await api('/api/companion/live-fill', {
+          method: 'POST',
+          body: { item: msg.item || null, url: msg.url || '', page: msg.page || {}, form: msg.form || [] },
+        }));
+        break;
+      // Admin-only "KB context: on/off" indicator (§2.10's note: the
+      // autopilot cannot compute this from `plan` itself, since it has no
+      // visibility into whether ChunkyLink's AMA index actually exists).
+      case 'companion:getKbStatus':
+        sendResponse(await api('/api/companion/kb-status'));
+        break;
+      // Multi-page link persistence (items 6/8) — chrome.storage.session,
+      // trusted-context-only, so the panel (a content script) round-trips
+      // through the worker rather than touching it directly.
+      case 'companion:setTabLink':
+        if (tabId != null && msg.item) await setTabLink(tabId, msg.item, msg.host || '');
+        sendResponse({ ok: true });
+        break;
+      case 'companion:clearTabLink':
+        if (tabId != null) await clearTabLink(tabId);
+        sendResponse({ ok: true });
+        break;
+      case 'companion:setPanelOpen':
+        if (tabId != null) await setPanelOpenState(tabId, Boolean(msg.open));
+        sendResponse({ ok: true });
+        break;
+      case 'companion:getLiveFillNextSteps':
+        sendResponse({ ok: true, value: tabId != null ? await liveFillNextStepsOf(tabId) : false });
+        break;
+      case 'companion:setLiveFillNextSteps':
+        if (tabId != null) await setLiveFillNextSteps(tabId, Boolean(msg.value));
+        sendResponse({ ok: true });
+        break;
+      // Panel position/collapse (item #7) — chrome.storage.local, per-origin,
+      // survives a worker restart AND a browser restart (unlike the
+      // session-scoped state above).
+      case 'companion:getPanelPos': {
+        const all = await chrome.storage.local.get({ panelPos: {} });
+        sendResponse({ ok: true, pos: (all.panelPos || {})[msg.origin] || null });
+        break;
+      }
+      case 'companion:setPanelPos': {
+        const all = await chrome.storage.local.get({ panelPos: {} });
+        const panelPos = all.panelPos || {};
+        panelPos[msg.origin] = { top: msg.top, left: msg.left };
+        await chrome.storage.local.set({ panelPos });
+        sendResponse({ ok: true });
+        break;
+      }
+      case 'companion:resetPanelPos': {
+        const all = await chrome.storage.local.get({ panelPos: {} });
+        const panelPos = all.panelPos || {};
+        delete panelPos[msg.origin];
+        await chrome.storage.local.set({ panelPos });
+        sendResponse({ ok: true });
+        break;
+      }
+      case 'companion:getPanelCollapsed': {
+        const all = await chrome.storage.local.get({ panelCollapsed: {} });
+        sendResponse({ ok: true, collapsed: Boolean((all.panelCollapsed || {})[msg.origin]) });
+        break;
+      }
+      case 'companion:setPanelCollapsed': {
+        const all = await chrome.storage.local.get({ panelCollapsed: {} });
+        const panelCollapsed = all.panelCollapsed || {};
+        if (msg.collapsed) panelCollapsed[msg.origin] = true; else delete panelCollapsed[msg.origin];
+        await chrome.storage.local.set({ panelCollapsed });
+        sendResponse({ ok: true });
+        break;
+      }
       case 'companion:testConnection':
         sendResponse(await api('/api/companion/plan?url='));
         break;

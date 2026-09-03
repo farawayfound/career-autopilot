@@ -266,52 +266,115 @@ access to it.
 
 ## 3. Applying to a job
 
+The panel has three tabs — **Fill**, **AI**, **Generate message**. Only Fill
+ever runs by itself; nothing on the AI tab (or anywhere else) calls your
+fleet's model without you pressing its own button. Every AI button's tooltip
+says what it will do and that it costs one model call before you click it.
+
 ### Automatic (default)
 
 Open the job's application page. If the URL matches an item in your active
-queue and the site is a known ATS, the panel **opens and fills by itself**:
-contact fields, screening answers, cover letter, resume attached, and drafts
-for any open free-text questions (your local model writes them; they land in
-the form *and* in a "Drafted answers" list for review). The toolbar icon shows
-a green ✓ on matched pages. You review everything and click Submit yourself —
-the extension has no way to do that, ever.
+queue and the site is a known ATS, the panel **opens and fills itself** —
+contact fields, screening answers, cover letter (text *and*, where the form
+takes an attachment, the actual PDF file), resume attached. The toolbar icon
+shows a green ✓ on matched pages. Nothing is drafted automatically — drafting
+open questions is a button on the AI tab now, so it never fires without you
+asking. You review everything and click Submit yourself — the extension has no
+way to do that, ever.
 
-Turn pieces of this off in the extension options: auto-run, auto-drafting, or
-widen it to non-ATS sites.
+Turn pieces of this off in the extension options: auto-run, or widen it to
+non-ATS sites.
+
+### Multi-page applications ("Continue" / "Next step")
+
+Once a page is matched or linked, the extension remembers it for that browser
+tab: every later Continue/Next-step page in the **same** application
+re-fills itself automatically, without asking you to pick the item again. The
+panel header shows **"Linked: Company — Role · Unlink"** whenever a link is
+active; click **Unlink** if it ever matches the wrong thing. The link is
+per-tab and clears itself once you submit, once the tab leaves the
+application's site, or when you close the tab — reopening the same posting
+later starts fresh.
 
 ### Manual (fallback, and non-queue pages)
 
 1. **Open the job's application page** in a normal tab.
 2. **Click the toolbar icon** (or press **Alt+Shift+C**). The panel opens down
-   the right-hand side.
+   the right-hand side — drag its header to move it out of the way (a
+   double-click on the header puts it back), or click **⤢** to collapse it to
+   a small pill that stays out from underneath a Continue button. It reopens
+   full-size the same way.
 3. **Check the header.** The panel matches the page URL against your active
-   queue automatically. When it finds a match it shows the company and role, and
-   loads that item's tailored answers and cover letter. When it doesn't, you get
-   a dropdown — *"— link this page to a pipeline item —"* — or you can stay in
-   profile-only mode, which still fills your contact details on any form.
-   Only items in an active state are offered (`pending_review`, `needs_input`,
-   `approved`, `needs_human`, `filled_awaiting_user`).
-4. **Click ⚡ Fill everything.** It fills the fields, attaches the resume, and
-   drafts open questions in one go. Then read the status line, e.g.
-   *"Auto-fill: 7 done, 2 left for you — review before submitting."*
+   queue automatically. When it finds a match it shows the company and role,
+   and loads that item's tailored answers and cover letter. When it doesn't,
+   a filterable list appears — type a company or role to narrow it down, or
+   stay in profile-only mode, which still fills your contact details on any
+   form. If the panel has a good guess (matched from the page's own title),
+   it is shown first with a one-click **Link** button. Only items in an
+   active state are offered (`pending_review`, `needs_input`, `approved`,
+   `needs_human`, `filled_awaiting_user`) — the same set, same order, as your
+   dashboard's **Ready for review** list.
+4. **Click ⚡ Fill everything.** It fills the fields, attaches the resume and
+   cover letter, in one go — deterministic, no model call. Then read the
+   status line, e.g. *"Auto-fill: 7 done, 2 left for you — review before
+   submitting."*
 5. **Work the leftovers.** Every field is a row with a coloured dot:
 
    | Dot | Meaning | What to do |
    |---|---|---|
-   | 🟢 green | filled | nothing |
-   | ⚪ grey | already had a value | nothing — it left your existing text alone |
+   | 🟢 green | filled, or already had a value | nothing — an existing value is left exactly as you had it |
+   | 🟣 purple | filled with a **best guess** | verify it — the closest match wasn't exact (e.g. it picked "I am not a protected veteran" for a stored "No") |
    | 🟠 amber | not found, or the fill failed | click the field on the page, press **Insert** |
+   | ⚫ grey | left blank on purpose (live fill only) | fill it yourself — sensitive, unclear, or the model declined |
 
    Amber is not a failure state, it is the fallback rung. **Insert** types the
    value into whichever field you last clicked. **Copy** puts it on the
-   clipboard for anything the extension cannot script at all.
+   clipboard for anything the extension cannot script at all. A purple dot's
+   tooltip names the value it picked — hover before trusting it.
 
-6. **Attach the resume.** The resume row's **Attach** button pushes the file
-   straight into the form's file input. If the form uses a custom uploader that
-   rejects it, press **⬇** to download the correctly-named PDF
-   (`FirstnameLastname_Resume.pdf`) and attach it by hand.
-7. **Answer the custom questions** — see AI assist below.
+6. **Attach the resume and cover letter.** Each has its own **Attach** button
+   that pushes the file straight into the form's file input, and a **⬇** to
+   download the correctly-named PDF (`FirstnameLastname_Resume.pdf` /
+   `FirstnameLastname_CoverLetter.pdf`) if a custom uploader rejects the
+   automatic attach.
+7. **Answer the custom questions** — see the AI tab below, or **✨ Live fill**
+   for everything left on the page at once.
 8. **Review the whole form yourself, then click Submit.**
+
+### The AI tab — live fill, drafting, one question at a time
+
+Everything here costs one call to your fleet's model, and only runs when you
+press its button. The status line at the top says your plan (paid/free), how
+many live fills and drafts you have left today, and — for the fleet owner
+only — whether their knowledge-base context is switched on.
+
+- **✨ Live fill** — first runs the same deterministic fill as ⚡ Fill
+  everything (so the model is never asked about something your profile
+  already answers), then reads every remaining open question on the page and
+  fills a best answer for each: free-text answers in your own voice, and for
+  dropdowns/radio groups, a value copied exactly from the option list (never
+  invented). **Paid plan only** — a free account's button is disabled with a
+  tooltip explaining why; ask whoever administers your account to upgrade
+  your tier. Results land as rows for review, exactly like the deterministic
+  fill's — purple for a lower-confidence answer, grey for one it left blank.
+- **Also live-fill the next steps of this application** — a checkbox, off by
+  default. With it ticked, a later Continue page still only fills itself
+  deterministically on its own — you get a one-line **"This step has N open
+  questions — Live-fill them?"** offer instead of a silent extra model call,
+  and pressing that offer's own button is what actually runs it.
+- **Draft open questions** — the old always-on drafting, now a deliberate
+  button: drafts an answer for every open free-text question on the page (up
+  to 6 per press) from your CV/profile, filled where a matching field is
+  found and listed for review either way.
+- **Read focused / Draft answer / Insert** — the single-question path for one
+  box at a time: click into the field, **Read focused** pulls its question
+  text (or type it yourself), **Draft answer** writes one answer, review and
+  **Insert** it (or **Copy**).
+
+Self-ID / EEO questions are tucked into a collapsible **Self-ID / EEO
+answers** section on the Fill tab, prefilled from your saved answers where
+you have set them — including radio-group questions the extension used to
+miss entirely, now matched the same best-guess way as dropdowns.
 
 ### A posting the pipeline has never seen — "＋ Process this page"
 
@@ -322,7 +385,9 @@ there is no evaluation, no score, no tailored CV — nothing to fill from.
 Open the panel and press **＋ Process this page**. That hands the URL to your
 own server, which runs the full evaluation: fetch the JD, score it, write the
 report, tailor the CV, draft the cover letter and screening answers, and
-package it for review.
+package it for review. **Paid plan only** for a guest account — a free
+account keeps the automatic scheduled scan instead, just not this on-demand
+button; the disabled button's tooltip says so.
 
 **Then close the tab.** Nothing depends on the page staying open. The work runs
 on your server and can take several minutes — longer if a scan is already
@@ -350,25 +415,11 @@ Two things worth knowing:
   login will come back as *failed — unsupported job board*. Public postings
   (which is nearly all of them) are fine.
 
-### AI assist for free-text questions
-
-For "Why do you want to work here?"-style boxes:
-
-1. Click into the question's answer field on the page
-2. **Read focused** — pulls the question text off the page into the panel
-   (you can also just type the question in yourself)
-3. **Draft answer** — runs it against your server's model. This can take a minute;
-   the status line says so. Drafts come from your CV, profile, and tone config —
-   the same source-of-truth boundary the rest of career-ops uses.
-4. **Read and edit the draft.** It is a starting point, not a final answer.
-5. **Insert into focused field**, or **Copy**
-
-Self-ID / EEO questions are tucked into a collapsible **Self-ID / EEO answers**
-section, prefilled from your saved answers where you have set them.
-
 ### Generate message — replying to a recruiter
 
-The panel's second tab, when your server has this feature turned on. Open it
+The panel's **Generate message** tab, when your account has this feature
+turned on (the fleet owner's own account only — a paid guest account gets a
+clear "admin-only" message instead of a draft). Open it
 on a recruiter's message, a LinkedIn thread, a posting or a profile:
 
 1. Optionally **select** the text you are replying to (a selection is read
@@ -497,3 +548,9 @@ you do.
 - Do not install this in a browser profile you share.
 - Your CV, answers, and drafts never leave the server you configured. Nothing
   is sent anywhere else.
+- **Live fill** only ever reads what is left EMPTY on the page after the
+  deterministic fill has already run — never a value you or the plan already
+  filled in — and never a demographic/EEO question, a criminal-history field,
+  a reference's contact details, or anything salary-shaped, no matter what
+  they end up sitting next to; those stay canned-only or blank for you to
+  fill by hand. File inputs are never part of what it reads.
