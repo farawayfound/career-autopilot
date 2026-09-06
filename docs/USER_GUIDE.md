@@ -334,9 +334,12 @@ later starts fresh.
 
 6. **Attach the resume and cover letter.** Each has its own **Attach** button
    that pushes the file straight into the form's file input, and a **⬇** to
-   download the correctly-named PDF (`FirstnameLastname_Resume.pdf` /
-   `FirstnameLastname_CoverLetter.pdf`) if a custom uploader rejects the
-   automatic attach.
+   download the correctly-named PDF if a custom uploader rejects the
+   automatic attach. Both files are named for the application they belong
+   to — `JaneD_CV_Google_SEII.pdf` / `JaneD_CoverLetter_Google_SEII.pdf`
+   (first name and last initial, the company, the role's initials) — so a
+   Downloads folder full of them stays searchable instead of piling up as
+   numbered copies of one name.
 7. **Answer the custom questions** — see the AI tab below, or **✨ Live fill**
    for everything left on the page at once.
 8. **Review the whole form yourself, then click Submit.**
