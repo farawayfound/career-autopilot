@@ -531,8 +531,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await api(`/api/companion/plan?${params.toString()}`));
         break;
       }
+      // company/role/jd_excerpt are the page's own hints (companion.js's
+      // draftJobHints), forwarded so an ITEMLESS draft — the extension's
+      // everyday shape, no queue item yet — still knows which employer the
+      // question is about. Without them the route saw a blank company name
+      // and could neither research it nor let the model write "why them".
       case 'companion:getDraft':
-        sendResponse(await api('/api/companion/draft', { method: 'POST', body: { questions: msg.questions, item: msg.item || null } }));
+        sendResponse(await api('/api/companion/draft', {
+          method: 'POST',
+          body: {
+            questions: msg.questions, item: msg.item || null,
+            company: msg.company || '', role: msg.role || '', jd_excerpt: msg.jd_excerpt || '',
+          },
+        }));
         break;
       case 'companion:getResume':
         sendResponse(await api(`/api/companion/resume${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));

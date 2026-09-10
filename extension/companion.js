@@ -1973,7 +1973,9 @@
     const questions = wanted.slice(0, 6); // the draft route clamps at 6
     if (!questions.length) { setStatusLine(fillSummary('No open questions needed drafting.')); return; }
     setStatusLine(`Drafting ${questions.length} answer${questions.length > 1 ? 's' : ''}… (local model — this can take a few minutes)`);
-    const res = await send({ type: 'companion:getDraft', questions, item: plan.item ? plan.item.id : null });
+    const res = await send({
+      type: 'companion:getDraft', questions, item: plan.item ? plan.item.id : null, ...draftJobHints(),
+    });
     if (!res || !res.ok || !Array.isArray(res.answers)) {
       setStatusLine((res && res.error) || 'Drafting failed — use AI assist below, one question at a time.', true);
       return;
@@ -1986,6 +1988,34 @@
     }
     renderRows();
     setStatusLine('Drafts inserted where their fields were found — review every answer, then submit yourself.');
+  }
+
+  // Who and what this page is about, for the /draft route's own grounding.
+  // A linked pipeline item wins; otherwise the page itself is all we have,
+  // and without it "why are you interested in {Company}?" reached the model
+  // with a blank company name and no posting text — so the only honest
+  // answer it could give was none at all.
+  //
+  // `containerOnly` on the extractor is the same safety live fill relies on:
+  // this runs on the application FORM, so the body fallback would otherwise
+  // ship the candidate's own typed answers (and, on a review step, their
+  // referees' contact details) to the model. An unrecognisable page sends no
+  // context rather than the wrong context. Untrusted page text either way —
+  // the answers prompt fences and labels it server-side.
+  // An h1 that is the page's chrome rather than the job's title — "Apply for
+  // this job", "Careers", "Job Application". Sending one as the role costs a
+  // research cache hit (the key is company+role) and puts nonsense in the
+  // question the service is asked, so an unusable h1 sends nothing instead.
+  const GENERIC_H1 = /^(?:apply|apply now|apply for this job|application|job application|submit(?: your)? application|careers?|jobs?|open (?:roles|positions)|join us|work with us|we're hiring|current openings)\b/i;
+
+  function draftJobHints() {
+    const hints = quickPageHints();
+    const h1 = GENERIC_H1.test(hints.h1) ? '' : hints.h1;
+    return {
+      company: (plan && plan.item && plan.item.company) || hints.company || '',
+      role: (plan && plan.item && plan.item.role) || h1 || '',
+      jd_excerpt: extractJdText({ containerOnly: true }).slice(0, 3000),
+    };
   }
 
   // The one-click DETERMINISTIC path: fill fields + answers, attach the
@@ -2483,13 +2513,21 @@
       const question = clean(q.value);
       if (!question) { setStatusLine('Type or Read a question first.', true); return; }
       setStatusLine('Drafting… (local model, can take a minute)');
-      const res = await send({ type: 'companion:getDraft', questions: [question], item: plan.item ? plan.item.id : null });
+      const res = await send({
+        type: 'companion:getDraft', questions: [question], item: plan.item ? plan.item.id : null, ...draftJobHints(),
+      });
       const draft = res && res.ok && res.answers && res.answers[0] && res.answers[0].answer;
       if (draft) {
         a.value = draft;
         a.hidden = false;
         root.getElementById('co-assist-out').hidden = false;
-        setStatusLine('Draft ready — review and edit before inserting.');
+        // Say when the company half of the answer came off the web rather
+        // than out of the candidate's own files — it is the half they most
+        // need to fact-check before sending.
+        const r = res.research;
+        setStatusLine(r && r.used
+          ? `Draft ready (grounded in web research${r.sources ? `, ${r.sources} source${r.sources > 1 ? 's' : ''}` : ''}${r.cached ? ', cached' : ''}) — check the company details before inserting.`
+          : 'Draft ready — review and edit before inserting.');
       } else {
         setStatusLine((res && res.error) || 'No usable draft came back — rephrase and retry.', true);
       }
