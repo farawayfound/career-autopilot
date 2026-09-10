@@ -403,7 +403,7 @@
   // contact field exists. Every profile-questions.mjs entry with
   // `sensitive: true` folds into this one regex on the server; this literal is
   // its mirror, generated from the same source and pinned by a parity test.
-  const SENSITIVE_QUESTION_LABEL_RE = /\b(?:citizenship|citizen of|security clearance|clearance level|desired salary|expected salary|salary expectation|salary range minimum|minimum salary|salary floor|salary range maximum|maximum salary|salary ceiling|currency|hourly rate|rate per hour|negotiable|criminal conviction|have you been convicted|criminal history|driver's license|drivers license|valid license|reference 1 name|reference name|reference 1 email|reference email|reference 1 phone|reference phone|reference 1 relationship|relationship to reference|reference 2 name|reference 2 email|reference 2 phone|reference 2 relationship|reference 3 name|reference 3 email|reference 3 phone|reference 3 relationship|gender|sex|hispanic|latino|race|ethnicity|veteran|disability|disabilities|sexual orientation|transgender|age range|ethnicity detail)\b/i;
+  const SENSITIVE_QUESTION_LABEL_RE = /\b(?:citizenship|citizen of|security clearance|clearance level|desired salary|expected salary|salary expectation|salary range minimum|minimum salary|salary floor|salary range maximum|maximum salary|salary ceiling|salary currency|compensation currency|pay currency|hourly rate|rate per hour|salary negotiable|is your salary negotiable|compensation negotiable|criminal conviction|have you been convicted|criminal history|driver's license|drivers license|valid license|reference 1 name|reference name|reference 1 email|reference email|reference 1 phone|reference phone|reference 1 relationship|relationship to reference|reference 2 name|reference 2 email|reference 2 phone|reference 2 relationship|reference 3 name|reference 3 email|reference 3 phone|reference 3 relationship|gender|sex|hispanic|latino|race|ethnicity|veteran|disability|disabilities|sexual orientation|transgender|age range|ethnicity detail)\b/i;
 
   function canonicalize(label) {
     const text = clean(label);
@@ -568,7 +568,7 @@
     '#job-description', '.job-description', '[class*="job-description" i]', '[class*="jobDescription" i]',
     '[class*="posting" i]', 'article', 'main', '[role="main"]', '#content',
   ];
-  function extractJdText() {
+  function extractJdText({ containerOnly = false } = {}) {
     let best = '';
     for (const sel of JD_CONTAINERS) {
       for (const el of document.querySelectorAll(sel)) {
@@ -580,7 +580,19 @@
     const body = String(document.body ? document.body.innerText : '').trim();
     // A container that holds most of the page is the description; a thin one
     // (a sidebar that merely matched a class) is not — fall back to the body.
-    if (best.length < 400 || best.length < body.length * 0.25) best = body;
+    const thin = best.length < 400 || best.length < body.length * 0.25;
+    // `containerOnly` refuses that body fallback. "Process this page" WANTS
+    // it — the whole page is the posting it is asking the server to evaluate,
+    // and the candidate pressed a button that says so. Live fill does not: it
+    // runs on the APPLICATION form, where document.body.innerText is the
+    // candidate's own half-typed answers and, on a review step, their
+    // references' names and phone numbers. Scraping that into a model prompt
+    // to answer "why do you want this role" is not a trade worth making, so an
+    // unidentifiable page contributes no job context at all.
+    if (thin) {
+      if (containerOnly) return '';
+      best = body;
+    }
     return best.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').slice(0, CAPTURE_MAX);
   }
   function extractVisibleQuestions() {
@@ -1892,7 +1904,21 @@
       type: 'companion:liveFill',
       item: plan.item ? plan.item.id : null,
       url: location.href,
-      page: { title: clean(document.title).slice(0, 200), company: (plan.item && plan.item.company) || '', jd_excerpt: '' },
+      // jd_excerpt was hardcoded '' here, so every "why do you want this role"
+      // answer was written with no knowledge of the posting — while the route
+      // budgeted 3000 chars for exactly this and "Process this page" already
+      // used the same extractor two tabs over. `containerOnly` is what makes
+      // that safe here: this runs on the application FORM, so without it the
+      // body fallback would ship the candidate's own entered answers (and, on
+      // a review step, their references' contact details) to the model. An
+      // unrecognisable page sends no context rather than the wrong context.
+      // Untrusted page content either way — the prompt's own notice covers
+      // <job_context> verbatim, and the delimiters are enforced server-side.
+      page: {
+        title: clean(document.title).slice(0, 200),
+        company: (plan.item && plan.item.company) || '',
+        jd_excerpt: extractJdText({ containerOnly: true }).slice(0, 3000),
+      },
       form,
     });
     if (!res || !res.ok) {
