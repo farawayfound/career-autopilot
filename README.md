@@ -1,21 +1,31 @@
 # Career-Ops Companion
 
-A browser extension that fills job application forms **in your own browser**,
-from your [career-ops](https://github.com/farawayfound/career-ops) pipeline —
-your session, your cookies, your IP, no automation fingerprint for a CAPTCHA
-to notice.
-
 > **It never submits.** It fills, inserts, attaches, and copies. You always
 > click the form's own Submit button yourself. There is no code path that
 > breaks this rule.
 
-This repository is the extension only — a generated mirror of the
+A browser extension that fills job application forms from your
+[career-ops](https://github.com/farawayfound/career-ops) pipeline, in your
+own browser and under your own signed-in session. Your answers stay on your
+machine and in the tab in front of you: the extension has no account of its
+own, applies for nothing on your behalf, and leaves every submission to you.
+
+This repository is the extension only, a generated mirror of the
 `extension/` directory inside the private
 [career-ops](https://github.com/farawayfound/career-ops) monorepo, published
 here so it can be installed without cloning that whole project. **The backend
 it talks to is not in this repository.** Most people use the hosted one at
 [davidchui.work](https://davidchui.work); the extension works just as well
 against your own self-hosted `career-ops` autopilot server.
+
+The hosted backend answers on a self-hosted inference fleet, open sourced as
+[open-fleet](https://github.com/farawayfound/open-fleet). There is a
+walkthrough of it at [davidchui.work/fleet/tour](https://davidchui.work/fleet/tour)
+and its live capacity at [davidchui.work/fleet](https://davidchui.work/fleet),
+where you can also ask for a demo key of your own.
+
+Built by [David Chui](https://davidchui.work). A personal project, on
+hardware I own and on my own time, unrelated to my employer.
 
 ## Install (3 steps)
 

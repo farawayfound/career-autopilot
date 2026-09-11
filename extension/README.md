@@ -1,12 +1,13 @@
 # Career-Ops Companion (browser extension)
 
+**Hard rule carried over from the rest of career-ops: it never submits.**
+It fills, inserts, and copies. You always click the form's own Submit.
+
 Fills job application forms **in your own browser** from your career-ops
 pipeline. Complements the dashboard live-browser mirror: the mirror remote-controls
 the worker machine's browser; the companion brings the data to the browser you
-are already in — your session, your IP, no CAPTCHA-hostile automation fingerprint.
-
-**Hard rule carried over from the rest of career-ops: it never submits.**
-It fills, inserts, and copies. You always click the form's own Submit.
+are already signed in to, so your answers stay on your machine and in the tab
+in front of you.
 
 > **Full documentation:** [docs/extension/user.md](../docs/extension/user.md)
 > (using it) · [docs/extension/agent.md](../docs/extension/agent.md)

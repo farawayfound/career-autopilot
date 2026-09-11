@@ -4,16 +4,15 @@
 (If you're curious how it works under the hood, career-ops's own
 `docs/extension/agent.md` has the architecture and API contract.)
 
-The companion fills job application forms **in your own browser**, using data
-from your career-ops pipeline. It is the alternative to the dashboard's
-live-browser mirror: the mirror remote-controls a worker machine's browser,
-the companion brings the data to the browser you are already sitting in — your
-session, your cookies, your IP, no automation fingerprint for a CAPTCHA to
-notice.
-
 > **It never submits.** It fills, inserts, attaches, and copies. You always
 > click the form's own Submit button yourself. This is a hard rule across all of
 > career-ops and the extension has no code path that breaks it.
+
+The companion fills job application forms **in your own browser**, using data
+from your career-ops pipeline. It is the alternative to the dashboard's
+live-browser mirror: the mirror remote-controls a worker machine's browser,
+the companion brings the data to the browser you are already signed in to, so
+your answers stay on your machine and in the tab in front of you.
 
 ---
 
