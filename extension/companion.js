@@ -2525,9 +2525,17 @@
         // than out of the candidate's own files — it is the half they most
         // need to fact-check before sending.
         const r = res.research;
-        setStatusLine(r && r.used
+        const first = res.answers[0];
+        // A "why them" paragraph written with NO company context (research
+        // down, page carried no posting text) is still a paragraph — the
+        // grammar guarantees that — but the model was told to say so, and
+        // that sentence is the one the candidate most needs to read before
+        // inserting. Low confidence + a note is exactly that case.
+        const caveat = first && first.confidence === 'low' && first.note
+          ? ` · ${String(first.note).slice(0, 160)}` : '';
+        setStatusLine((r && r.used
           ? `Draft ready (grounded in web research${r.sources ? `, ${r.sources} source${r.sources > 1 ? 's' : ''}` : ''}${r.cached ? ', cached' : ''}) — check the company details before inserting.`
-          : 'Draft ready — review and edit before inserting.');
+          : 'Draft ready — review and edit before inserting.') + caveat, Boolean(caveat));
       } else {
         setStatusLine((res && res.error) || 'No usable draft came back — rephrase and retry.', true);
       }
