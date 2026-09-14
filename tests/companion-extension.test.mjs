@@ -990,3 +990,229 @@ export { paintFeatureGates };
   ok(/fillEverything\(\{ auto: true \}\)/.test(autorunHandler) && !/fillLive\(/.test(autorunHandler),
     'the auto-run handler (incl. its relink branch) calls only the deterministic fill, never fillLive — the AI tab\'s own click is the only way to trigger it');
 }
+
+// ── SPEC3 item #1: a constrained input never receives a value it cannot hold ─
+// The Deloitte Avature bug: a type="month" start-date field handed a
+// free-text availability answer ("Two weeks from offer acceptance.") got
+// silently blanked by Chrome's own value sanitizer (no exception — the
+// assignment just no-ops to ''), and the panel still reported the row
+// 'filled' because nothing downstream of the native setter ever saw a
+// failure. valueFitsInput/coerceForInput/setNativeValue are extracted from
+// the SHIPPED source (never copied by hand) and driven against a minimal
+// stub window: HTMLInputElement/HTMLTextAreaElement/HTMLSelectElement
+// prototypes whose `value` setter records that it ran (or throws, for the
+// one case exercising setNativeValue's own try/catch), plus bare
+// InputEvent/Event stubs — companion.js calls `new InputEvent(...)` and
+// `new Event(...)` directly, never through `window.`.
+{
+  const guardSource = `
+class Event { constructor(type, opts) { this.type = type; Object.assign(this, opts || {}); } }
+class InputEvent extends Event {}
+function makeCtor() {
+  function Ctor() {}
+  Object.defineProperty(Ctor.prototype, 'value', {
+    configurable: true,
+    set(v) {
+      if (this.__throwOnSet) throw new Error('setter boom');
+      this.__setterCalled = (this.__setterCalled || 0) + 1;
+      this.value = v;
+    },
+  });
+  return Ctor;
+}
+const window = { HTMLInputElement: makeCtor(), HTMLTextAreaElement: makeCtor(), HTMLSelectElement: makeCtor() };
+${extractMultilineConst(COMPANION, 'INPUT_FORMATS')}
+${extractFunction(COMPANION, 'coerceForInput')}
+${extractFunction(COMPANION, 'valueFitsInput')}
+${extractFunction(COMPANION, 'setNativeValue')}
+export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
+`;
+  const { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue } =
+    await import(`data:text/javascript;base64,${Buffer.from(guardSource, 'utf8').toString('base64')}`);
+
+  ok(JSON.stringify(Object.keys(INPUT_FORMATS).sort()) === JSON.stringify(['color', 'date', 'datetime-local', 'month', 'time', 'url', 'week'].sort()),
+    'INPUT_FORMATS covers exactly the HTML input types Chrome sanitizes on a mismatch');
+
+  // Stub elements. `dispatched` is a plain own array (not a getter behind a
+  // closure the harness can't see) so a test can assert "no dispatch" by its
+  // length alone.
+  const makeEl = (tagName, type, initial = '') => ({
+    tagName, type, value: initial, dispatched: [],
+    dispatchEvent(e) { this.dispatched.push(e.type); },
+  });
+
+  // The regression itself: a free-text answer into a month field.
+  {
+    const el = makeEl('INPUT', 'month', '');
+    const ok1 = setNativeValue(el, 'Two weeks from offer acceptance.');
+    ok(ok1 === false, 'setNativeValue: a free-text answer into a month input is refused');
+    ok(el.__setterCalled === undefined, 'setNativeValue: the native setter is never called on a refused value');
+    ok(el.dispatched.length === 0, 'setNativeValue: nothing is dispatched on a refused value (no phantom "input"/"change")');
+    ok(el.value === '', 'setNativeValue: the element is left exactly as it was found');
+  }
+  // A conforming month value is accepted as-is.
+  {
+    const el = makeEl('INPUT', 'month', '');
+    ok(setNativeValue(el, '2026-10') === true, 'setNativeValue: a well-formed YYYY-MM value fits a month input');
+    ok(el.value === '2026-10' && el.dispatched.includes('input') && el.dispatched.includes('change'),
+      'setNativeValue: the value is set and input+change both dispatch on success');
+  }
+  // A full ISO date coerces down to what the month input can hold.
+  {
+    const el = makeEl('INPUT', 'month', '');
+    ok(setNativeValue(el, '2026-10-15') === true, 'setNativeValue: an ISO date fits a month input once coerced');
+    ok(el.value === '2026-10', 'setNativeValue: the month input receives the coerced YYYY-MM, not the original YYYY-MM-DD');
+  }
+  // A US-style date coerces into what a date input wants.
+  {
+    const el = makeEl('INPUT', 'date', '');
+    ok(setNativeValue(el, '10/15/2026') === true, 'setNativeValue: an M/D/YYYY value fits a date input once coerced');
+    ok(el.value === '2026-10-15', 'setNativeValue: the date input receives ISO YYYY-MM-DD');
+  }
+  // A currency-formatted amount coerces into a bare number.
+  {
+    const el = makeEl('INPUT', 'number', '');
+    ok(setNativeValue(el, '$150,000') === true, 'setNativeValue: a currency-formatted figure fits a number input once coerced');
+    ok(el.value === '150000', 'setNativeValue: thousands separator and currency symbol are stripped before the set');
+  }
+  // Non-numeric text into a number input is refused outright.
+  {
+    const el = makeEl('INPUT', 'number', '');
+    ok(setNativeValue(el, 'abc') === false, 'setNativeValue: non-numeric text into a number input is refused');
+    ok(el.__setterCalled === undefined, 'setNativeValue: and, again, the setter never runs on a refused value');
+  }
+  // Unconstrained controls always fit.
+  {
+    const el = makeEl('INPUT', 'text', '');
+    ok(setNativeValue(el, 'anything at all') === true, 'setNativeValue: a plain text input holds anything');
+    ok(el.value === 'anything at all', 'setNativeValue: an unconstrained text input is set unchanged (no coercion applied)');
+  }
+  {
+    const el = makeEl('TEXTAREA', undefined, '');
+    ok(setNativeValue(el, 'line one\nline two\nline three') === true, 'setNativeValue: a multi-line value fits a textarea');
+  }
+  // Email format.
+  {
+    const good = makeEl('INPUT', 'email', '');
+    const bad = makeEl('INPUT', 'email', '');
+    ok(setNativeValue(good, 'a@b.co') === true, 'setNativeValue: a well-formed address fits an email input');
+    ok(setNativeValue(bad, 'not an email') === false, 'setNativeValue: plain text is refused by an email input');
+    const multi = makeEl('INPUT', 'email', '');
+    multi.multiple = true;
+    ok(setNativeValue(multi, 'a@b.co, c@d.co') === true,
+      'setNativeValue: a comma-separated list fits a multiple email input when every part is a valid address');
+    ok(setNativeValue({ ...multi, value: '', dispatched: [], dispatchEvent(e) { this.dispatched.push(e.type); } }, 'a@b.co, not-an-email') === false,
+      'setNativeValue: one bad part in a multiple email input refuses the whole value');
+  }
+  // The setter itself throwing must never escape — the whole point of
+  // wrapping the body in try/catch.
+  {
+    const el = makeEl('INPUT', 'text', '');
+    el.__throwOnSet = true;
+    let threw = false;
+    let result;
+    try { result = setNativeValue(el, 'anything'); } catch { threw = true; }
+    ok(threw === false, 'setNativeValue: a throwing native setter never escapes the function');
+    ok(result === false, 'setNativeValue: and is reported as a refusal, not a silent success');
+  }
+
+  // valueFitsInput/coerceForInput directly, for the two rungs setNativeValue
+  // delegates to (belt-and-braces on top of the end-to-end cases above).
+  ok(valueFitsInput(makeEl('SELECT', undefined), 'anything') === true, 'valueFitsInput: a select always fits (no HTML constraint to violate)');
+  ok(valueFitsInput({ tagName: 'DIV', isContentEditable: true }, 'anything') === true, 'valueFitsInput: contenteditable always fits');
+  ok(coerceForInput(makeEl('INPUT', 'text'), '2026-10-15') === '2026-10-15', 'coerceForInput: a type it does not know how to coerce is returned untouched');
+}
+
+// ── SPEC3 item #1: every actuation caller honours a setNativeValue refusal ──
+{
+  const fillControlSrc = extractFunction(COMPANION, 'fillControl');
+  ok(/if \(!setNativeValue\(el, String\(value\)\)\) return false;/.test(fillControlSrc),
+    'fillControl: the plain-input tail never reports a fill that setNativeValue refused');
+
+  const typeIntoSrc = extractFunction(COMPANION, 'typeInto');
+  ok(/return setNativeValue\(el, String\(value\)\) && el\.value === String\(value\);/.test(typeIntoSrc),
+    'typeInto: the execCommand fallback never reports success when the native-setter fallback was refused');
+  ok(/execCommand\('insertText'/.test(typeIntoSrc), 'typeInto: still tries the browser input pipeline first (Workday behaviour unchanged)');
+
+  const insertSrc = extractFunction(COMPANION, 'insertIntoFocused');
+  ok(/if \(!setNativeValue\(el, text\)\) return null;/.test(insertSrc),
+    'insertIntoFocused: returns null (not a fake "inserted" label) when the focused field refuses the text');
+
+  const comboSrc = extractFunction(COMPANION, 'fillCombobox');
+  ok(/setNativeValue\(input, String\(value\)\)/.test(comboSrc),
+    'fillCombobox\'s filter-input write goes through the same choke point, so it is covered for free');
+}
+
+// ── SPEC3 item #1 (Errors page symptom): "single question" box on the AI tab ─
+// The user's own words: "I cannot enter anything into the 'single question'
+// field of the AI tab." That field is a plain <textarea> the panel's own
+// insertText()/collectQuestions() flow never routes through a constrained
+// HTML input — it broke because of item #2 (keyboard isolation), covered
+// below — but confirm here that nothing about the typed-input guard itself
+// can touch a textarea: setNativeValue must short-circuit to "always fits"
+// before it ever reaches INPUT_FORMATS/number/email logic that has no
+// meaning for one.
+{
+  ok(/if \(!el \|\| el\.tagName === 'TEXTAREA' \|\| el\.tagName === 'SELECT' \|\| el\.isContentEditable\) return true;/.test(COMPANION),
+    'valueFitsInput exits true for textareas before any type-specific check runs');
+}
+
+// ── SPEC3 item #2: keystrokes typed into the panel never reach the page ────
+// The retargeting bug: the panel is a shadow root on a host <div> appended to
+// document.documentElement, so a page with a document-level keyboard handler
+// (Avature/Deloitte-style hotkeys) sees every keystroke typed in the panel as
+// a keystroke on that plain <div> — not an input — and a handler that cancels
+// "keys outside inputs" cancels typing in the panel's own textareas. This is
+// the actual cause of "I cannot enter anything into the single-question
+// field": stopping propagation at the host, in the bubble phase, keeps the
+// panel's own shadow-tree listeners (which run first) working while denying
+// the page's document-level handler any event to act on.
+{
+  const buildPanelStart = COMPANION.indexOf('function buildPanel(');
+  ok(buildPanelStart > -1, 'buildPanel exists');
+  const hostCreate = COMPANION.indexOf("host = document.createElement('div');", buildPanelStart);
+  const attach = COMPANION.indexOf('host.attachShadow(', buildPanelStart);
+  ok(hostCreate > buildPanelStart, 'buildPanel creates the host element');
+  ok(attach > hostCreate, 'the shadow root is attached after the host is created');
+
+  const between = COMPANION.slice(hostCreate, attach);
+  const loopMatch = between.match(/for \(const type of \[([^\]]*)\]\) \{\s*\n\s*host\.addEventListener\(type, \(e\) => e\.stopPropagation\(\)\);\s*\n\s*\}/);
+  ok(Boolean(loopMatch),
+    'buildPanel registers a host.addEventListener(type, stopPropagation) loop between creating the host and attaching the shadow root');
+
+  const KEY_ISOLATION_TYPES = ['keydown', 'keyup', 'keypress', 'input', 'beforeinput', 'compositionstart',
+    'compositionupdate', 'compositionend', 'paste', 'cut', 'copy'];
+  const listedTypes = loopMatch ? loopMatch[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean) : [];
+  ok(JSON.stringify(listedTypes) === JSON.stringify(KEY_ISOLATION_TYPES),
+    `the loop lists exactly the eleven keyboard/composition/clipboard event types (got ${JSON.stringify(listedTypes)})`);
+
+  ok(!listedTypes.includes('mousedown') && !listedTypes.includes('click') && !listedTypes.includes('focusin'),
+    'mousedown/click/focusin are deliberately excluded — the existing mousedown-preventDefault on panel buttons and page-focus tracking must keep propagating');
+}
+
+// ── SPEC3 item #3: errors inside a fill never take the panel down ─────────
+// Confirms the audit's conclusion holds in the shipped source rather than
+// just in the plan: every per-control write already routes through a guarded
+// entry point, and the new setNativeValue guard is itself fully wrapped.
+{
+  const setNativeValueSrc = extractFunction(COMPANION, 'setNativeValue');
+  ok(/^\s*function setNativeValue\(el, value\) \{\s*\n\s*try \{/.test(setNativeValueSrc),
+    'setNativeValue wraps its entire body in try/catch, starting on the very first line');
+  ok(/\} catch \{\s*\n\s*return false;\s*\n\s*\}\s*\n\s*\}\s*$/.test(setNativeValueSrc),
+    'setNativeValue\'s catch returns false rather than letting a DOM exception propagate up through fillControl/typeInto/insertIntoFocused');
+
+  const fillControlSrc = extractFunction(COMPANION, 'fillControl');
+  ok(/\} catch \{\s*\n\s*return false;\s*\n\s*\}\s*\n\s*\}\s*$/.test(fillControlSrc),
+    'fillControl ends with the same catch-all try/catch it always had (unchanged by the item #1 fix)');
+  ok(fillControlSrc.indexOf('try {') < fillControlSrc.indexOf("if (isComboLike(el)"),
+    'the try block still opens before the first control-type branch, so every branch (including the new setNativeValue guard) is covered');
+
+  const attachFileSrc = extractFunction(COMPANION, 'attachFile');
+  ok(/try \{[\s\S]*\} catch \{\s*\n\s*return false;\s*\n\s*\}/.test(attachFileSrc),
+    'attachFile is guarded (a bad file/DataTransfer failure never throws out of the fill loop)');
+}
+
+// ── manifest: patch bump for the item #1/#2 fix ────────────────────────────
+{
+  ok(MANIFEST.version === '0.4.1', 'manifest version bumped to 0.4.1 for the typed-input guard + keyboard isolation fix');
+}

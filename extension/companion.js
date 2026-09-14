@@ -54,18 +54,86 @@
   }, true);
 
   // ── value actuation ───────────────────────────────────────────────────────
+  // Values a constrained input can actually hold. The DOM setter does not
+  // throw on a mismatch — it silently sanitizes the value to '' and Chrome
+  // logs an error per attempt — so the check has to be OURS, and it has to
+  // happen BEFORE the setter runs. This is item #1's real root cause: a
+  // Deloitte Avature `type="month"` start-date field handed a free-text
+  // availability answer ("Two weeks from offer acceptance.") got silently
+  // blanked by Chrome, one console error landed on the extension's Errors
+  // page, and the panel still reported the row 'filled' because the assignment
+  // itself never threw. Every caller that can reach a constrained input
+  // (fillControl, typeInto's fallback, fillCombobox, insertIntoFocused) goes
+  // through setNativeValue, so fixing it here fixes all four at once.
+  const INPUT_FORMATS = {
+    month: /^\d{4,}-(0[1-9]|1[0-2])$/, date: /^\d{4,}-\d{2}-\d{2}$/, week: /^\d{4,}-W\d{2}$/,
+    time: /^\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/, 'datetime-local': /^\d{4,}-\d{2}-\d{2}T\d{2}:\d{2}/,
+    color: /^#[0-9a-f]{6}$/i, url: /^[a-z][a-z0-9+.-]*:/i,
+  };
+  // Best-effort coercion of a plainly-formatted value into what a constrained
+  // input wants: an ISO date into a month input, a US-style m/d/yyyy into a
+  // date input, a currency-formatted amount into a bare number. Anything that
+  // does not look like one of these shapes is returned untouched and left to
+  // valueFitsInput to judge on its own — this function never decides fitness,
+  // only reshapes a value that might already fit once punctuation is gone.
+  function coerceForInput(el, value) {
+    const type = String((el && el.type) || '').toLowerCase();
+    const text = String(value);
+    if (type === 'month') {
+      const m = text.match(/^(\d{4})-(\d{2})(-\d{2})?/);
+      if (m) return `${m[1]}-${m[2]}`;
+    } else if (type === 'date') {
+      let m = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    } else if (type === 'number' || type === 'range') {
+      return text.replace(/,/g, '').replace(/^[$€£¥]\s*/, '').trim();
+    }
+    return text;
+  }
+  // True for every control that will actually hold `value` — textareas,
+  // selects and contenteditable boxes never refuse anything, so they always
+  // fit. `maxlength` is deliberately NOT enforced here: Chrome accepts a
+  // programmatic value longer than the attribute allows (only keystrokes are
+  // capped), so treating it as a hard filter would refuse values the browser
+  // itself is happy to hold.
+  function valueFitsInput(el, value) {
+    if (!el || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable) return true;
+    if (el.tagName !== 'INPUT') return true;
+    const type = String(el.type || '').toLowerCase();
+    if (INPUT_FORMATS[type]) return INPUT_FORMATS[type].test(coerceForInput(el, value));
+    if (type === 'number' || type === 'range') return Number.isFinite(Number(coerceForInput(el, value)));
+    if (type === 'email') {
+      const text = String(value);
+      if (el.multiple) return text.split(',').every((part) => /^[^\s@]+@[^\s@]+$/.test(part.trim()));
+      return /^[^\s@]+@[^\s@]+$/.test(text);
+    }
+    return true;
+  }
   // React and friends track input values through the native setter — calling
   // it directly (instead of `el.value = x`) then dispatching input/change is
   // what makes frameworks accept programmatic values. Same trick password
-  // managers use; more reliable than synthetic typing.
+  // managers use; more reliable than synthetic typing. Returns false (having
+  // touched and dispatched nothing) when the value cannot fit the control, or
+  // when the setter itself throws — a caller that ignores the return value
+  // gets exactly the pre-fix behaviour, but every caller this file ships now
+  // checks it.
   function setNativeValue(el, value) {
-    const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
-      : el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
-        : window.HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-    if (setter) setter.call(el, value); else el.value = value;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    try {
+      if (!valueFitsInput(el, value)) return false;
+      const coerced = coerceForInput(el, value);
+      const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+        : el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
+          : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(el, coerced); else el.value = coerced;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // react-select listens on mousedown, native widgets on click — fire the trio.
@@ -111,12 +179,17 @@
     try { el.select?.(); } catch { /* not selectable */ }
     let ok = false;
     try { ok = document.execCommand('insertText', false, String(value)); } catch { ok = false; }
-    if (!ok || el.value !== String(value)) setNativeValue(el, String(value));
-    else {
+    if (ok && el.value === String(value)) {
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.blur();
+      return true;
     }
-    return el.value === String(value);
+    // execCommand either failed outright or (Workday sometimes) reported
+    // success while leaving a stale value — fall back to the native setter,
+    // but never claim a fill the setter itself refused (a constrained input
+    // handed a shape it cannot hold): setNativeValue's own false propagates
+    // straight through instead of being masked by a redundant el.value check.
+    return setNativeValue(el, String(value)) && el.value === String(value);
   }
 
   // Custom dropdown triggers: react-select's input, a role=combobox, or a
@@ -266,7 +339,7 @@
         return true;
       }
       if (IS_WORKDAY && /^(INPUT|TEXTAREA)$/.test(el.tagName)) return typeInto(el, value);
-      setNativeValue(el, String(value));
+      if (!setNativeValue(el, String(value))) return false;
       return el.value === String(value) || el.value !== '';
     } catch {
       return false;
@@ -286,7 +359,12 @@
       if (!document.execCommand('insertText', false, text)) el.textContent = text;
       el.dispatchEvent(new InputEvent('input', { bubbles: true }));
     } else {
-      setNativeValue(el, text);
+      // A constrained field (type=month/date/number/...) that cannot hold
+      // free text refuses here exactly like fillControl does — the caller
+      // (panelBus['companion:inserted']) never hears back, so the existing
+      // pending-insert timeout fires its "No field focused" status line
+      // instead of a false "Inserted into: ...".
+      if (!setNativeValue(el, text)) return null;
     }
     return labelFor(el) || el.name || el.id || 'the focused field';
   }
@@ -2667,6 +2745,22 @@
   function buildPanel({ show = true } = {}) {
     activeTab = 'fill'; // a rebuilt panel always opens on Fill (its markup marks that tab on)
     host = document.createElement('div');
+    // Keyboard, composition and clipboard events typed INTO the panel stop at
+    // the host: shadow-DOM retargeting makes the page's document-level key
+    // handlers see them as keystrokes on a plain <div> (the host), and a
+    // hotkey/accessibility handler that cancels "keys outside inputs" then
+    // cancels typing in our textareas — the AI tab's Single-question box was
+    // unusable on apply.deloitte.com for exactly this reason. Bubble-phase
+    // stop at the host is enough: the panel's own listeners inside the shadow
+    // tree have already run, and capture-phase handlers on window/document
+    // (which we cannot intercept) are rare for keys. mousedown/click/focusin
+    // are deliberately NOT in this list — the existing mousedown ->
+    // preventDefault on panel buttons and the page-focus tracking both depend
+    // on those propagating exactly as they do today.
+    for (const type of ['keydown', 'keyup', 'keypress', 'input', 'beforeinput', 'compositionstart',
+      'compositionupdate', 'compositionend', 'paste', 'cut', 'copy']) {
+      host.addEventListener(type, (e) => e.stopPropagation());
+    }
     host.id = 'career-ops-companion-host';
     // Shadow root isolates our styles from the page's (and vice versa).
     root = host.attachShadow({ mode: 'open' });
