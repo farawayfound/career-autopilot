@@ -2051,9 +2051,7 @@
     const questions = wanted.slice(0, 6); // the draft route clamps at 6
     if (!questions.length) { setStatusLine(fillSummary('No open questions needed drafting.')); return; }
     setStatusLine(`Drafting ${questions.length} answer${questions.length > 1 ? 's' : ''}… (local model — this can take a few minutes)`);
-    const res = await send({
-      type: 'companion:getDraft', questions, item: plan.item ? plan.item.id : null, ...draftJobHints(),
-    });
+    const res = await requestDraft({ questions, item: plan.item ? plan.item.id : null, ...draftJobHints() });
     if (!res || !res.ok || !Array.isArray(res.answers)) {
       setStatusLine((res && res.error) || 'Drafting failed — use AI assist below, one question at a time.', true);
       return;
@@ -2094,6 +2092,57 @@
       role: (plan && plan.item && plan.item.role) || h1 || '',
       jd_excerpt: extractJdText({ containerOnly: true }).slice(0, 3000),
     };
+  }
+
+  // Drafting now runs as an async server-side job instead of one long-held
+  // request: the `write` role can be pinned to a box that is busy running the
+  // cycle's cover letters (minutes, not seconds), and Cloudflare's edge cuts
+  // an origin request off well before that finishes — the candidate saw a
+  // bare "request failed (5xx)" with no draft. `companion:getDraft` with
+  // `async:true` now returns 202 {job} immediately; this polls
+  // `companion:getDraftJob` until the job is done, failed, or this has waited
+  // too long, using the same sleep/POLL_MS/host-liveness pattern as
+  // watchRequest above. Both call sites just swap their old direct `send()`
+  // of that message for a call to `requestDraft({...})` instead — the
+  // resolved value has the exact same shape as the old synchronous response,
+  // so nothing after the call needs to change.
+  //
+  // An older server build with no async support answers the POST directly
+  // (no `job` field) — that response passes straight through untouched, so
+  // this stays compatible with it.
+  const DRAFT_POLL_MAX_MS = 15 * 60 * 1000; // longest a draft may run before giving up
+
+  async function requestDraft(payload) {
+    const res = await send({ type: 'companion:getDraft', ...payload, async: true });
+    if (!res || !res.ok || !res.job) return res; // old sync shape, or an error — unchanged either way
+    const t0 = Date.now();
+    let dots = 0;
+    while (host && Date.now() - t0 < DRAFT_POLL_MAX_MS) {
+      await sleep(POLL_MS);
+      const p = await send({ type: 'companion:getDraftJob', id: res.job.id });
+      if (!p || !p.ok || !p.job) {
+        if (p && p.status === 404) return { ok: false, error: 'the server lost this draft (it may have restarted) — try again' };
+        continue; // a server blip — keep polling, same as watchRequest's own loop
+      }
+      const j = p.job;
+      if (j.status === 'queued' || j.status === 'running') {
+        dots = (dots + 1) % 4;
+        const secs = Math.round((Date.now() - t0) / 1000);
+        const label = j.phase === 'research' ? 'Researching the company'
+          : j.phase === 'drafting' ? 'Drafting'
+          : j.phase === 'demo' ? 'Preparing your fleet demo key'
+          : 'Waiting for a free box';
+        setStatusLine(`${label}${'.'.repeat(dots + 1)} (${secs}s — the fleet picks whichever box is free)`);
+        continue;
+      }
+      if (j.status === 'failed') return { ok: false, error: j.error || 'drafting failed — is inference up?' };
+      // done: the job body is exactly what the old synchronous route would
+      // have returned (it already carries its own `ok` — true, or false with
+      // an `error` for an all-null draft) — preserve it rather than recompute it.
+      if (j.http === 200 && j.body && typeof j.body === 'object') return { ...j.body };
+      return { ok: false, error: (j.body && j.body.error) || `request failed (${j.http})` };
+    }
+    return { ok: false, error: 'drafting timed out — the fleet is very busy; try again in a minute' };
   }
 
   // The one-click DETERMINISTIC path: fill fields + answers, attach the
@@ -2591,9 +2640,7 @@
       const question = clean(q.value);
       if (!question) { setStatusLine('Type or Read a question first.', true); return; }
       setStatusLine('Drafting… (local model, can take a minute)');
-      const res = await send({
-        type: 'companion:getDraft', questions: [question], item: plan.item ? plan.item.id : null, ...draftJobHints(),
-      });
+      const res = await requestDraft({ questions: [question], item: plan.item ? plan.item.id : null, ...draftJobHints() });
       const draft = res && res.ok && res.answers && res.answers[0] && res.answers[0].answer;
       if (draft) {
         a.value = draft;

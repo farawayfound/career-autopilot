@@ -542,8 +542,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           body: {
             questions: msg.questions, item: msg.item || null,
             company: msg.company || '', role: msg.role || '', jd_excerpt: msg.jd_excerpt || '',
+            // async:true routes the server onto its job-queue path (202 +
+            // {job}) instead of holding the request open for the whole
+            // drafting call — companion.js's requestDraft() sends this and
+            // then polls companion:getDraftJob below. Forwarded verbatim so
+            // an old panel build (no async field) keeps the prior
+            // synchronous shape with no change on this end.
+            async: msg.async === true,
           },
         }));
+        break;
+      // Poll a job started by the getDraft call above (async:true). Same
+      // shape as companion:getRequest just below — an id in, the server's
+      // own job status/body out, untouched.
+      case 'companion:getDraftJob':
+        sendResponse(await api(`/api/companion/draft?id=${encodeURIComponent(msg.id || '')}`));
         break;
       case 'companion:getResume':
         sendResponse(await api(`/api/companion/resume${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));
