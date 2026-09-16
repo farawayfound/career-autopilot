@@ -107,7 +107,10 @@ Toggles in the extension options (auto-run / auto-draft / watch-all-sites).
 4. **⚡ Fill everything**, then work the remaining rows with Insert / Copy
 5. **Attach** the resume (or ⬇ download it and attach manually)
 6. **AI assist**: click into an unanswered question → **Read focused** →
-   **Draft answer** → review/edit → **Insert**
+   **Draft answer** → review/edit → **Insert**. Every drafted answer for a
+   linked application is saved on the server too — the AI tab's **Remembered
+   answers** dropdown lists past Q&A pairs with Insert / Copy / Edit / Delete,
+   and later drafts build on them instead of repeating the same opening.
 7. Review everything, click the form's Submit yourself
 
 **Generate message (second tab):** the panel's second tab, when your server has

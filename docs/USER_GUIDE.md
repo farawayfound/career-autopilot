@@ -373,6 +373,27 @@ only — whether their knowledge-base context is switched on.
   text (or type it yourself), **Draft answer** writes one answer, review and
   **Insert** it (or **Copy**).
 
+**Remembered answers.** Every answer drafted for a linked application — from
+Draft open questions, the single-question path, or Live fill — is saved on
+your server against that application, not just this browser tab. The AI tab's
+**Remembered answers** section lists them: pick an application from the
+dropdown (the linked one is preselected) to see its questions and answers,
+each with **Insert**, **Copy**, **Edit**, and **Delete**. Two things ride on
+this list existing: later drafts for the *same* application read it back and
+are told not to repeat an opening line or lean on the same project twice, so
+five answers on one form add up to one story instead of five restatements of
+your best bullet point; and interview prep reads it too, so prep for that
+company can expect a question that probes a claim you already put on the
+form. An entry is marked *inserted into the form* once the companion places a
+*fresh* draft there — the single-question box's own Insert, an auto-draft
+fill, or a live-fill placement — not by re-using an already-saved answer's own
+Insert/Copy button here in the Remembered answers list, which only puts the
+stored text in front of you again and reaches no server. Either way that mark
+only means the extension put an answer in front of the company, never that
+the company read it or that the application was submitted; `submitted_at` is
+set once your own **Submit ✔** click and confirmation are detected (§3
+above), not before.
+
 Self-ID / EEO questions are tucked into a collapsible **Self-ID / EEO
 answers** section on the Fill tab, prefilled from your saved answers where
 you have set them — including radio-group questions the extension used to
@@ -462,11 +483,19 @@ Rejected one.
 
 Anything you typed yourself wins. If you answer a question by hand while a
 draft is still being written, the draft does not replace it — it lands in the
-panel's **Drafted answers** list instead, and the field keeps your text. Same
-for a dropdown you corrected or a radio button you switched: a later fill
-leaves them alone. And the resume is only ever attached automatically inside
-the application itself, never into a support-chat or feedback widget the
-careers page happens to embed.
+Fill tab's **Drafted this session** list instead, and the field keeps your
+text. Same for a dropdown you corrected or a radio button you switched: a
+later fill leaves them alone. And the resume is only ever attached
+automatically inside the application itself, never into a support-chat or
+feedback widget the careers page happens to embed.
+
+That Fill-tab list and the AI tab's **Remembered answers** list look similar
+but answer different questions: **Drafted this session** is what landed on
+*this* page during *this* browser session — it clears when you close the tab.
+Remembered answers is what is saved on the server for this application across
+every session, past and future, and is what feeds the next draft and
+interview prep. Editing or deleting an answer only ever happens on the AI
+tab's saved list.
 
 ---
 

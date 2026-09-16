@@ -542,6 +542,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           body: {
             questions: msg.questions, item: msg.item || null,
             company: msg.company || '', role: msg.role || '', jd_excerpt: msg.jd_excerpt || '',
+            // The page the draft is FOR — the server records answers into the
+            // per-application ledger keyed off the item, but also stamps the
+            // page url on each recorded entry (application-answers.mjs's
+            // page_url) so a later review can tell which form a Q/A pair came
+            // from even across a multi-step ATS flow.
+            url: msg.url || '',
             // async:true routes the server onto its job-queue path (202 +
             // {job}) instead of holding the request open for the whole
             // drafting call — companion.js's requestDraft() sends this and
@@ -557,6 +563,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // own job status/body out, untouched.
       case 'companion:getDraftJob':
         sendResponse(await api(`/api/companion/draft?id=${encodeURIComponent(msg.id || '')}`));
+        break;
+      // Per-application answer memory (the AI tab's "Remembered answers"
+      // section) — the server-side ledger every draft/live-fill call already
+      // writes into; these three just read/edit/delete it. Query params on
+      // the DELETE (not a body) on purpose: some proxies strip a DELETE body,
+      // the same reason /forget above had to accept POST instead.
+      case 'companion:getAnswers':
+        sendResponse(await api(`/api/companion/answers${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));
+        break;
+      case 'companion:saveAnswer':
+        sendResponse(await api('/api/companion/answers', {
+          method: 'POST',
+          body: {
+            item: msg.item, id: msg.id || null, question: msg.question || '',
+            answer: msg.answer == null ? null : String(msg.answer), used: msg.used === true,
+          },
+        }));
+        break;
+      case 'companion:deleteAnswer':
+        sendResponse(await api(`/api/companion/answers?item=${encodeURIComponent(msg.item)}&id=${encodeURIComponent(msg.id)}`, { method: 'DELETE' }));
         break;
       case 'companion:getResume':
         sendResponse(await api(`/api/companion/resume${msg.item ? `?item=${encodeURIComponent(msg.item)}` : ''}`));

@@ -1632,7 +1632,17 @@
   let questionGather = null; // in-flight collectQuestions gather window
   let liveFillGather = null; // in-flight harvest() gather window
   let liveFillRows = []; // [{id, label, status, value, note}] — the last Live-fill run's own results
+  let liveFillRemembered = {}; // { fieldId: entryId } — the last live-fill response's own ledger recordings, so a fill that lands is marked used
   let activeTab = 'fill'; // 'fill' | 'ai' | 'message' — the panel body shows one at a time; only Fill auto-runs
+  // "Remembered answers" (AI tab) — the server-side per-application ledger
+  // every draft/live-fill call writes into. rememberedApps is the dropdown's
+  // own option list; rememberedSel survives a tab switch/reload so the
+  // candidate does not lose their place; lastAssistDraft is the single-
+  // question box's own most recent draft (question + the text as drafted),
+  // used to tell an edited answer from an unedited one when Insert/Copy saves it.
+  let rememberedApps = [];
+  let rememberedSel = null;
+  let lastAssistDraft = null; // { question, text }
   let messageDraft = { context: '', out: '', key: null }; // survives tab switches
 
   const send = (msg) => chrome.runtime.sendMessage(msg);
@@ -1754,6 +1764,18 @@
       // filled in any frame wins over failed/notfound reported by another
       if (prev === 'filled' || prev === 'already') continue;
       rowStatus.set(r.key, r.status);
+      // Honest ledger: a drafted answer that actually landed in the form is
+      // marked used the moment it does — never silently. The prev-status
+      // guard above already keeps this from firing twice for the same key.
+      // Only the mark, never the text: the server recorded this answer's prose
+      // when it drafted it, and the row's own text can carry MORE than that
+      // (the admin's fleet-demo block is woven into a project answer after
+      // the ledger write, on purpose) — resending it would overwrite the
+      // clean prose and flag it "edited by you" when nobody edited anything.
+      if (r.key.startsWith('draft:') && (r.status === 'filled' || r.status === 'already') && plan && plan.item) {
+        const row = draftRows.find((d) => d.key === r.key);
+        if (row) send({ type: 'companion:saveAnswer', item: plan.item.id, question: row.question, used: true });
+      }
     }
     paintStatuses();
     setStatusLine(fillSummary());
@@ -1861,6 +1883,12 @@
     for (const r of results) {
       const row = liveFillRows.find((x) => x.id === r.id);
       if (row) { row.status = r.status; if (r.value != null) row.value = r.value; }
+      // Honest ledger: only a field the /live-fill route actually recorded
+      // (long-text answers — see liveFillRemembered) carries an entry id here,
+      // so a short field that was filled but never recorded is left alone.
+      if ((r.status === 'filled' || r.status === 'guessed') && plan && plan.item && liveFillRemembered[r.id]) {
+        send({ type: 'companion:saveAnswer', item: plan.item.id, id: liveFillRemembered[r.id], used: true });
+      }
     }
     if (activeTab === 'ai') renderAiTab();
   };
@@ -2003,6 +2031,11 @@
       setStatusLine((res && res.message) || (res && res.error) || 'Live fill failed.', true);
       return;
     }
+    // The route's own record of which fields it wrote into this application's
+    // answer ledger (long-text fields only — see application-answers.mjs) —
+    // liveFillApplied uses it to mark exactly those entries used once the
+    // fill actually lands, never a field that was filled but never recorded.
+    liveFillRemembered = res.remembered || {};
     // liveFillRows carries the label/type from the harvest (the /live-fill
     // response never repeats those) so the review list can show more than a
     // bare id.
@@ -2063,7 +2096,11 @@
       broadcast({ type: 'companion:fillByLabel', key, question: String(ans.question || ''), text: String(ans.answer), ...autoScope });
     }
     renderRows();
-    setStatusLine('Drafts inserted where their fields were found — review every answer, then submit yourself.');
+    setStatusLine('Drafts inserted where their fields were found — review every answer, then submit yourself.'
+      + (plan.item ? ` · saved for ${plan.item.company}` : ''));
+    // The server just recorded these into the per-application ledger — the AI
+    // tab's own list should show them immediately, not just on the form.
+    if (activeTab === 'ai' && plan.item) loadRememberedAnswers(plan.item.id);
   }
 
   // Who and what this page is about, for the /draft route's own grounding.
@@ -2091,6 +2128,10 @@
       company: (plan && plan.item && plan.item.company) || hints.company || '',
       role: (plan && plan.item && plan.item.role) || h1 || '',
       jd_excerpt: extractJdText({ containerOnly: true }).slice(0, 3000),
+      // The page the draft is FOR, stamped on the recorded answer's page_url
+      // so a later review of the ledger can tell which step of a multi-page
+      // ATS flow a Q/A pair came from.
+      url: location.href,
     };
   }
 
@@ -2460,7 +2501,15 @@
       });
     }
     if (draftRows.length) {
-      section('Drafted answers');
+      section('Drafted this session');
+      // Two lists can look alike — this one and the AI tab's "Remembered
+      // answers" — so say where the durable, editable copy lives.
+      if (plan.item) {
+        const hint = document.createElement('div');
+        hint.className = 'co-hint';
+        hint.textContent = 'Saved answers for this application are on the AI tab.';
+        body.appendChild(hint);
+      }
       for (const d of draftRows) body.appendChild(rowEl(d.key, clean(d.question), d.answer, { multiline: true }));
     }
     if (plan.cover_letter) {
@@ -2600,7 +2649,11 @@
       <div class="co-assist-btns" id="co-assist-out" hidden>
         <button class="co-btn co-primary" id="co-assist-ins">Insert into focused field</button>
         <button class="co-btn" id="co-assist-cp">Copy</button>
-      </div>`;
+      </div>
+      <div class="co-sec">Remembered answers</div>
+      <div class="co-hint" id="co-mem-hint"></div>
+      <select class="co-mem-select" id="co-mem-pick" hidden></select>
+      <div id="co-mem-list"></div>`;
     body.appendChild(wrap);
     for (const btn of wrap.querySelectorAll('button')) btn.addEventListener('mousedown', (e) => e.preventDefault());
 
@@ -2646,6 +2699,9 @@
         a.value = draft;
         a.hidden = false;
         root.getElementById('co-assist-out').hidden = false;
+        // Remembers what was actually drafted, so Insert/Copy below can tell
+        // whether the candidate edited it before saving it to the ledger.
+        lastAssistDraft = { question, text: draft };
         // Say when the company half of the answer came off the web rather
         // than out of the candidate's own files — it is the half they most
         // need to fact-check before sending.
@@ -2660,14 +2716,24 @@
           ? ` · ${String(first.note).slice(0, 160)}` : '';
         setStatusLine((r && r.used
           ? `Draft ready (grounded in web research${r.sources ? `, ${r.sources} source${r.sources > 1 ? 's' : ''}` : ''}${r.cached ? ', cached' : ''}) — check the company details before inserting.`
-          : 'Draft ready — review and edit before inserting.') + caveat, Boolean(caveat));
+          : 'Draft ready — review and edit before inserting.') + caveat
+          + (res.remembered && plan.item ? ` · saved for ${plan.item.company}` : ''), Boolean(caveat));
+        if (activeTab === 'ai' && plan.item) loadRememberedAnswers(plan.item.id);
       } else {
         setStatusLine((res && res.error) || 'No usable draft came back — rephrase and retry.', true);
       }
     });
-    root.getElementById('co-assist-ins').addEventListener('click', () => { if (clean(a.value)) insertText(a.value.trim()); });
+    root.getElementById('co-assist-ins').addEventListener('click', () => {
+      if (!clean(a.value)) return;
+      const text = a.value.trim();
+      insertText(text);
+      saveAssistAnswer(text);
+    });
     root.getElementById('co-assist-cp').addEventListener('click', async () => {
-      if (clean(a.value)) setStatusLine((await copyText(a.value.trim())) ? 'Draft copied.' : 'Copy failed', false);
+      if (!clean(a.value)) return;
+      const text = a.value.trim();
+      setStatusLine((await copyText(text)) ? 'Draft copied.' : 'Copy failed', false);
+      saveAssistAnswer(text);
     });
 
     paintFeatureGates();
@@ -2683,6 +2749,179 @@
       const statusEl = root.getElementById('co-ai-status');
       if (statusEl && kb) statusEl.textContent += statusEl.textContent ? ` · KB context: ${kb.available ? 'on' : 'off'}` : `KB context: ${kb.available ? 'on' : 'off'}`;
     }
+    // Show what was already drafted for this application in earlier AI-tab
+    // sessions — loads on every render of this tab, drafting nothing new.
+    await loadRememberedAnswers();
+  }
+
+  // Single-question box's Insert/Copy: the ledger must never be updated
+  // silently (v2 rule), so this only fires once a draft actually exists for
+  // the current question, and says so on the status line when the candidate
+  // edited the text before saving it.
+  async function saveAssistAnswer(text) {
+    if (!plan || !plan.item || !lastAssistDraft) return;
+    // The text travels only when the candidate changed it. An unedited
+    // draft is already in the ledger exactly as the server wrote it — and
+    // what sits in the box can carry more than that (the admin's fleet-demo
+    // block is woven into a project answer AFTER the ledger write, on
+    // purpose), so resending it would overwrite the clean prose and flag it
+    // "edited by you" for an edit that never happened.
+    const edited = text !== lastAssistDraft.text;
+    const res = await send({
+      type: 'companion:saveAnswer',
+      item: plan.item.id,
+      question: lastAssistDraft.question,
+      answer: edited ? text : null,
+      used: true,
+    });
+    if (res && res.ok && edited) {
+      const el = root.getElementById('co-status');
+      if (el) el.textContent += " · saved your edit to this application's answers";
+    }
+    if (activeTab === 'ai') loadRememberedAnswers(plan.item.id);
+  }
+
+  // ── "Remembered answers" (AI tab) ──────────────────────────────────────────
+  // Reads the server-side per-application ledger every draft/live-fill call
+  // writes into (application-answers.mjs) — shows prior-session answers
+  // without drafting anything new, so a candidate who just wants to review
+  // what was already written for an application never has to press a button
+  // that costs a model call.
+  //
+  // A plain <select> is deliberate here, unlike the searchable co-pick
+  // candidate filter item #10 replaced: this list is short (only applications
+  // that already have saved answers), so a filterable picker would be
+  // over-engineering for the common case of one or two entries.
+  async function loadRememberedAnswers(preferItem = null) {
+    const hint = root.getElementById('co-mem-hint');
+    const pick = root.getElementById('co-mem-pick');
+    const list = root.getElementById('co-mem-list');
+    if (!hint || !pick || !list) return;
+    const res = await send({ type: 'companion:getAnswers' });
+    rememberedApps = (res && res.ok && res.applications) || [];
+    // The linked application always shows up here, even the first time it is
+    // drafted for and the server has not recorded anything yet — otherwise
+    // linking a fresh application would show no way to reach its own (soon
+    // to exist) saved-answers list.
+    if (plan && plan.item && !rememberedApps.some((app) => app.item === plan.item.id)) {
+      rememberedApps = [{ item: plan.item.id, company: plan.item.company, role: plan.item.role, count: 0 }, ...rememberedApps];
+    }
+    if (!rememberedApps.length) {
+      hint.textContent = 'Link this page to an application and every answer drafted for it is remembered here.';
+      pick.hidden = true;
+      pick.innerHTML = '';
+      list.textContent = '';
+      return;
+    }
+    const selected = preferItem || rememberedSel || (plan && plan.item && plan.item.id) || rememberedApps[0].item;
+    rememberedSel = selected;
+    pick.hidden = false;
+    pick.innerHTML = rememberedApps.map((app) => {
+      const label = `${app.company} — ${app.role} (${app.count})`;
+      return `<option value="${escHtml(app.item)}"${app.item === selected ? ' selected' : ''}>${escHtml(label)}</option>`;
+    }).join('');
+    pick.onchange = () => { rememberedSel = pick.value; loadRememberedList(pick.value); };
+    hint.textContent = plan && plan.item
+      ? 'Answers drafted for the linked application are saved on your server and fed back into every later draft, so they build on each other instead of repeating.'
+      : 'Pick an application to review the answers drafted for it.';
+    await loadRememberedList(selected);
+  }
+
+  async function loadRememberedList(item) {
+    const res = await send({ type: 'companion:getAnswers', item });
+    const entries = (res && res.ok && res.entries) || [];
+    const submittedAt = res && res.ok ? res.submitted_at : null;
+    paintRememberedList(item, entries, submittedAt);
+  }
+
+  function paintRememberedList(item, entries, submittedAt) {
+    const list = root.getElementById('co-mem-list');
+    if (!list) return;
+    list.textContent = '';
+    const header = document.createElement('div');
+    header.className = 'co-hint';
+    header.textContent = `${entries.length} saved · ${submittedAt ? `submitted ${String(submittedAt).slice(0, 10)}` : 'not marked submitted'}`;
+    list.appendChild(header);
+    // Two lists can look alike — this one and the Fill tab's "Drafted this
+    // session" — so when they're about the SAME application, say how many
+    // evaluation-time answers exist too, and where to find them.
+    if (plan && plan.item && item === plan.item.id) {
+      const answered = (plan.answers || []).filter((ans) => ans.answer != null).length;
+      if (answered) {
+        const line = document.createElement('div');
+        line.className = 'co-hint';
+        line.textContent = `Screening answers drafted at evaluation time: ${answered} (Fill tab)`;
+        list.appendChild(line);
+      }
+    }
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'co-hint';
+      empty.textContent = 'No answers saved for this application yet.';
+      list.appendChild(empty);
+      return;
+    }
+    for (const entry of entries) list.appendChild(rememberedEntryEl(item, entry));
+  }
+
+  // One saved Q/A pair — Insert/Copy work like every other row's; Edit swaps
+  // in a textarea; Delete is this panel's first two-click confirm, deliberate
+  // because the ledger this deletes from also feeds interview prep, not just
+  // this form.
+  function rememberedEntryEl(item, entry) {
+    const row = document.createElement('div');
+    row.className = 'co-mem-entry';
+    const metaBits = [entry.used ? 'inserted into the form' : 'drafted only', entry.source];
+    if (entry.edited) metaBits.push('edited by you');
+    row.innerHTML = `
+      <div class="co-mem-q" title="${escHtml(entry.question)}">${escHtml(entry.question)}</div>
+      <div class="co-mem-a">${escHtml(entry.answer)}</div>
+      <div class="co-mem-meta">${escHtml(metaBits.filter(Boolean).join(' · '))}</div>
+      <div class="co-mem-btns">
+        <button class="co-btn co-mem-ins">Insert</button>
+        <button class="co-btn co-mem-cp">Copy</button>
+        <button class="co-btn co-mem-edit">Edit</button>
+        <button class="co-btn co-mem-del">Delete</button>
+      </div>`;
+    for (const btn of row.querySelectorAll('button')) btn.addEventListener('mousedown', (e) => e.preventDefault());
+    row.querySelector('.co-mem-ins').addEventListener('click', () => insertText(entry.answer));
+    row.querySelector('.co-mem-cp').addEventListener('click', async () => {
+      setStatusLine((await copyText(entry.answer)) ? `Copied: ${entry.question.slice(0, 60)}` : 'Copy failed', false);
+    });
+    row.querySelector('.co-mem-edit').addEventListener('click', () => {
+      const aDiv = row.querySelector('.co-mem-a');
+      const ta = document.createElement('textarea');
+      ta.rows = 5;
+      ta.value = entry.answer;
+      aDiv.replaceWith(ta);
+      const btns = document.createElement('div');
+      btns.className = 'co-assist-btns';
+      btns.innerHTML = '<button class="co-btn co-primary co-mem-save">Save</button><button class="co-btn co-mem-cancel">Cancel</button>';
+      ta.after(btns);
+      for (const btn of btns.querySelectorAll('button')) btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btns.querySelector('.co-mem-save').addEventListener('click', async () => {
+        const res = await send({ type: 'companion:saveAnswer', item, id: entry.id, answer: ta.value });
+        if (res && res.ok) { setStatusLine('Saved your edit.'); await loadRememberedAnswers(item); }
+        else setStatusLine((res && res.error) || 'Could not save your edit.', true);
+      });
+      btns.querySelector('.co-mem-cancel').addEventListener('click', () => loadRememberedList(item));
+    });
+    let deleteArmed = false;
+    const delBtn = row.querySelector('.co-mem-del');
+    delBtn.addEventListener('click', () => {
+      if (!deleteArmed) {
+        deleteArmed = true;
+        delBtn.textContent = 'Sure?';
+        setTimeout(() => { deleteArmed = false; delBtn.textContent = 'Delete'; }, 4000);
+        return;
+      }
+      (async () => {
+        const res = await send({ type: 'companion:deleteAnswer', item, id: entry.id });
+        if (res && res.ok) { setStatusLine('Deleted.'); await loadRememberedAnswers(item); }
+        else setStatusLine((res && res.error) || 'Could not delete.', true);
+      })();
+    });
+    return row;
   }
 
   // Buttons whose availability depends on tier/cap — disabled, never hidden,
@@ -2866,6 +3105,13 @@
         .co-check { display: flex; align-items: center; gap: 6px; margin: 8px 0; color: var(--co-dim); font-size: 12px; }
         .co-ai { display: flex; flex-direction: column; }
         .co-ai .co-btn { margin-top: 4px; }
+        .co-mem-select { width: 100%; margin: 6px 0; padding: 4px; background: var(--co-surface); color: var(--co-fg);
+          border: 1px solid var(--co-border); border-radius: 6px; font-size: 12px; }
+        .co-mem-entry { padding: 6px 0; border-top: 1px solid var(--co-border); }
+        .co-mem-q { font-weight: 600; margin-bottom: 2px; }
+        .co-mem-a { color: var(--co-dim); white-space: pre-wrap; max-height: 6.5em; overflow: hidden; }
+        .co-mem-meta { color: var(--co-dim); font-size: 11px; margin: 2px 0 4px; }
+        .co-mem-btns { display: flex; gap: 6px; flex-wrap: wrap; }
         .co-panel.collapsed { width: 40px; height: 40px; overflow: hidden; border-radius: 50%; }
         .co-panel.collapsed .co-tabs, .co-panel.collapsed .co-linked, .co-panel.collapsed .co-actions,
         .co-panel.collapsed .co-status, .co-panel.collapsed .co-body, .co-panel.collapsed .co-foot { display: none; }
