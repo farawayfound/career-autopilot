@@ -105,7 +105,11 @@ Toggles in the extension options (auto-run / auto-draft / watch-all-sites).
 3. It auto-matches the page URL to your queue (or pick the item / stay in
    profile-only mode for un-evaluated applications)
 4. **⚡ Fill everything**, then work the remaining rows with Insert / Copy
-5. **Attach** the resume (or ⬇ download it and attach manually)
+5. **Attach** the resume and cover letter (or ⬇ download them and attach
+   manually). The cover letter goes only into the form's own cover-letter
+   upload — a form that asks for none gets nothing, and the panel says so. A
+   résumé-parser box such as Ashby's "Autofill from resume" is never mistaken
+   for the Resume question.
 6. **AI assist**: click into an unanswered question → **Read focused** →
    **Draft answer** → review/edit → **Insert**. Every drafted answer for a
    linked application is saved on the server too — the AI tab's **Remembered
@@ -135,6 +139,11 @@ received), so it is tuned to miss rather than to guess. When it misses, the
 dashboard's **Mark as applied** button on the processed list does the same two
 writes. Tracker writes are forward-only: nothing pulls a row back from
 Interview.
+
+**After reloading or updating the extension**, reload any application tab that
+was already open: a panel opened before the reload can no longer reach the
+extension, and says so ("reload this page to reconnect the panel") rather than
+filling from a stale copy.
 
 **Verify:** `npm run companion:smoke` (real browser, fake form, asserts what
 landed in the DOM) and `node tests/test-all.mjs --only companion-extension`.

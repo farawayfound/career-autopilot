@@ -833,14 +833,15 @@ export { pickOption, labelMatcher, diceCoefficient };
   const findResumeSrc = extractFunction(COMPANION, 'findResumeInput');
   ok(/COVER_LETTER_RE/.test(findCoverSrc), 'findCoverLetterInput scans label/accept/nearby text for cover-letter phrasing');
   ok(/findResumeInputRaw\(\)/.test(findCoverSrc),
-    'findCoverLetterInput\'s generic fallback compares against the OLD unguarded resume lookup, not a mutually-recursive call to findResumeInput');
+    'findCoverLetterInput\'s positional rung compares against the raw resume lookup, not a mutually-recursive call to findResumeInput');
   ok(/const cover = findCoverLetterInput\(\);/.test(findResumeSrc) && /el !== cover/.test(findResumeSrc),
     'findResumeInput excludes whatever findCoverLetterInput claims');
-  ok(findResumeRawSrc.length > 0, 'findResumeInputRaw (the pre-fix logic, kept private) still exists');
+  ok(findResumeRawSrc.length > 0, 'findResumeInputRaw (the lookup without the cover-letter exclusion, kept private) still exists');
+  ok(!/accept\*=/.test(extractMultilineConst(COMPANION, 'ATS_PACKS')),
+    'no ATS pack resolves the resume by a bare accept= match — it matched Ashby\'s "Autofill from resume" parser box first');
 
-  // Drive the two real functions against a minimal stub DOM: two file inputs,
-  // one clearly labelled as a cover letter, on a host that matches no
-  // ATS_PACKS entry (so only the generic label-matching path runs).
+  // Drive the real functions against a minimal stub DOM. `#id` and
+  // `input[name="…"]` are all the ATS packs' resume selectors need.
   const domSource = `
 let hostname = 'careers.example.com';
 const location = { get hostname() { return hostname; } };
@@ -848,32 +849,49 @@ const CSS = { escape: (s) => String(s).replace(/["\\\\]/g, '\\\\$&') };
 let fileInputs = [];
 const document = {
   querySelectorAll(sel) { return sel === 'input[type="file"]' ? fileInputs : []; },
-  querySelector(sel) { return sel === 'input[type="file"]' ? (fileInputs[0] || null) : null; },
+  querySelector(sel) {
+    if (sel === 'input[type="file"]') return fileInputs[0] || null;
+    let m = sel.match(/^#([\\w-]+)$/);
+    if (m) return fileInputs.find((el) => el.id === m[1]) || null;
+    m = sel.match(/^input\\[name="([^"]+)"\\]$/);
+    if (m) return fileInputs.find((el) => el.name === m[1]) || null;
+    return null;
+  },
 };
-export const setFiles = (list) => { fileInputs = list; };
+export const setFiles = (list, host = 'careers.example.com') => { fileInputs = list; hostname = host; };
 ${extractConst(COMPANION, 'clean')}
 ${extractFunction(COMPANION, 'labelFor')}
 const visible = (el) => el && el.offsetParent !== null && !el.disabled;
 ${extractMultilineConst(COMPANION, 'ATS_PACKS')}
 ${extractConst(COMPANION, 'atsPack')}
+${extractConst(COMPANION, 'AUTOFILL_INPUT_RE')}
+${extractFunction(COMPANION, 'fileInputContext')}
+${extractFunction(COMPANION, 'isAutofillFileInput')}
+${extractFunction(COMPANION, 'realFileInputs')}
+${extractFunction(COMPANION, 'ownLabel')}
 ${extractConst(COMPANION, 'COVER_LETTER_RE')}
+${extractConst(COMPANION, 'OTHER_DOCUMENT_RE')}
 ${extractFunction(COMPANION, 'findCoverLetterInput')}
 ${extractFunction(COMPANION, 'findResumeInputRaw')}
 ${extractFunction(COMPANION, 'findResumeInput')}
-export { findCoverLetterInput, findResumeInput };
+export { findCoverLetterInput, findResumeInput, isAutofillFileInput };
 `;
-  const { setFiles, findCoverLetterInput, findResumeInput } =
+  const { setFiles, findCoverLetterInput, findResumeInput, isAutofillFileInput } =
     await import(`data:text/javascript;base64,${Buffer.from(domSource, 'utf8').toString('base64')}`);
 
-  const fileEl = (id, ariaLabel) => ({
-    tagName: 'INPUT', type: 'file', id, offsetParent: {}, disabled: false,
-    getAttribute: (k) => ({ 'aria-label': ariaLabel || '' }[k] ?? null),
-    labels: [],
-    closest: () => null,
+  // A container the input sits in: its class names and its visible text are
+  // the two things isAutofillFileInput and labelFor read off it.
+  const box = (className, innerText, parentElement = null) => ({ className, innerText, parentElement });
+  const fileEl = ({ id = '', name = '', label = '', aria = '', parent = null } = {}) => ({
+    tagName: 'INPUT', type: 'file', id, name, className: '', offsetParent: {}, disabled: false,
+    getAttribute: (k) => ({ 'aria-label': aria || null }[k] ?? null),
+    labels: label ? [{ textContent: label }] : [],
+    parentElement: parent,
+    closest: (sel) => (/^div/.test(sel) ? parent : null),
   });
 
-  const resumeInput = fileEl('resume-file', 'Resume');
-  const coverInput = fileEl('cover-file', 'Cover Letter (optional)');
+  const resumeInput = fileEl({ id: 'resume-file', aria: 'Resume' });
+  const coverInput = fileEl({ id: 'cover-file', aria: 'Cover Letter (optional)' });
   setFiles([resumeInput, coverInput]);
   const cover = findCoverLetterInput();
   const resume = findResumeInput();
@@ -883,10 +901,317 @@ export { findCoverLetterInput, findResumeInput };
 
   // Only ONE file input, no cover-letter signal anywhere — the sole input is
   // presumably the resume; findCoverLetterInput must not also claim it.
-  const onlyInput = fileEl('only-file', '');
+  const onlyInput = fileEl({ id: 'only-file' });
   setFiles([onlyInput]);
   ok(findCoverLetterInput() === null, 'findCoverLetterInput returns null when there is only one, unlabelled file input');
   ok(findResumeInput() === onlyInput, 'findResumeInput still resolves the sole input as the resume');
+
+  // Two upload questions and no other signal: the positional guess still
+  // stands — the other input is the cover letter's.
+  const plainResume = fileEl({ id: 'r', aria: 'Resume' });
+  const unlabelled = fileEl({ id: 'u' });
+  setFiles([plainResume, unlabelled]);
+  ok(findCoverLetterInput() === unlabelled && findResumeInput() === plainResume,
+    'two upload questions, one of them the resume: the other takes the cover letter (the positional rung)');
+  // …but never an input whose own label names a different document…
+  const portfolio = fileEl({ id: 'p', aria: 'Portfolio (PDF)' });
+  setFiles([plainResume, portfolio]);
+  ok(findCoverLetterInput() === null && findResumeInput() === plainResume,
+    'an upload labelled as another document (a portfolio) is that document\'s slot — no cover letter goes there');
+  // …and never a guess among three.
+  setFiles([plainResume, unlabelled, fileEl({ id: 'u2' })]);
+  ok(findCoverLetterInput() === null, 'three upload questions and no cover-letter label: no positional guess');
+
+  // The layout every current Ashby form has (measured 2026-09-21 on 17 live
+  // postings): an "Autofill from resume" parser box above the form — no id,
+  // no name, PDF-accepting, first in the DOM — then the Resume question as
+  // #_systemfield_resume with an EMPTY name. The old logic attached the resume
+  // to the parser box and the cover letter into the Resume field.
+  const autofillRoot = box('_root_xd2v0_1 ashby-application-form-autofill-input-root',
+    'Autofill from resume Upload your resume here to autofill key application fields. Upload file',
+    box('_autofillPane_5yu8i_448 ashby-application-form-autofill-pane', 'Autofill from resume …'));
+  const parserBox = () => fileEl({ parent: autofillRoot });
+  const ashbyResume = () => fileEl({
+    id: '_systemfield_resume', label: 'Resume',
+    parent: box('_container_10xk4_70 ashby-application-form-input-file', 'Upload File or drag and drop here',
+      box('_fieldEntry_1e3gg_28 ashby-application-form-field-entry', 'Resume Upload File or drag and drop here')),
+  });
+  {
+    const parser = parserBox();
+    const real = ashbyResume();
+    setFiles([parser, real], 'jobs.ashbyhq.com');
+    ok(isAutofillFileInput(parser) && !isAutofillFileInput(real), 'Ashby\'s parser box is recognised as one; the Resume question is not');
+    ok(findResumeInput() === real, 'Ashby: the resume goes to #_systemfield_resume, not the "Autofill from resume" parser box');
+    ok(findCoverLetterInput() === null,
+      'Ashby with no cover-letter question: nothing is claimed for the cover letter — never the Resume field');
+  }
+  {
+    const parser = parserBox();
+    const real = ashbyResume();
+    const letter = fileEl({ id: '53c8ff07-780b-493b-84eb', label: 'Cover Letter', parent: box('x', 'Upload File or drag and drop here') });
+    setFiles([parser, real, letter], 'jobs.ashbyhq.com');
+    ok(findCoverLetterInput() === letter && findResumeInput() === real,
+      'Ashby with a "Cover Letter" question: the letter goes there and the resume to the Resume question');
+  }
+  {
+    const parser = parserBox();
+    const real = ashbyResume();
+    const extra = fileEl({ id: 'b1890667-a914-4163', label: 'Additional Attachments', parent: box('x', 'UPLOAD FILE or drag and drop here') });
+    setFiles([parser, real, extra], 'jobs.ashbyhq.com');
+    ok(findCoverLetterInput() === extra && findResumeInput() === real,
+      'Ashby with Resume + "Additional Attachments": the parser box does not count, so the positional rung sees two questions');
+  }
+  // A parser box recognised from its wording alone, on a site with no pack.
+  {
+    const wordy = fileEl({ id: 'af', parent: box('upload-zone', 'Autofill your application with your resume') });
+    const real = fileEl({ id: 'rs', aria: 'Resume' });
+    setFiles([wordy, real]);
+    ok(findResumeInput() === real && findCoverLetterInput() === null,
+      'a parser box named only by its text ("Autofill your application…") is skipped for both files');
+  }
+  // When the parser box is the ONLY file input — Workday's "Autofill with
+  // Resume" step — uploading there is the point, so it still gets the resume.
+  {
+    const only = fileEl({ id: 'wd', parent: box('css-1', 'Autofill with Resume Upload a file or drag and drop here') });
+    setFiles([only]);
+    ok(findResumeInput() === only && findCoverLetterInput() === null,
+      'a parser box that is the only file input on the page still receives the resume');
+  }
+}
+
+// ── the panel ↔ worker channel never fails silently ───────────────────────
+// "Uncaught (in promise) Error: A listener indicated an asynchronous response
+// by returning true, but the message channel closed before a response was
+// received" — the worker was stopped mid-request (a pending fetch is not
+// activity to Chrome's 30s idle timer), the panel's promise rejected, and the
+// click handler died with its status line frozen. Both halves are pinned: the
+// worker stays up and always answers, and the panel never lets a transport
+// failure escape.
+{
+  const withAsync = (src, name) => {
+    const fn = extractFunction(src, name);
+    return src.includes(`async function ${name}(`) ? `async ${fn}` : fn;
+  };
+
+  // Worker, deadlines: generous only where a model call sits behind the route.
+  {
+    const { requestTimeoutMs } = new Function(`${extractFunction(SW, 'requestTimeoutMs')}\nreturn { requestTimeoutMs };`)();
+    ok(requestTimeoutMs('/api/companion/live-fill', 'POST') === 200000 && requestTimeoutMs('/api/companion/draft', 'POST') === 200000
+      && requestTimeoutMs('/api/companion/generate-message', 'POST') === 200000,
+    'worker deadline: 200s for the model-backed POSTs (live fill budgets up to 180s server-side)');
+    ok(requestTimeoutMs('/api/companion/draft?id=j1', 'GET') === 30000 && requestTimeoutMs('/api/companion/plan?url=x', 'GET') === 30000,
+      'worker deadline: 30s for a poll or a plan — a missed poll just polls again');
+    ok(requestTimeoutMs('/api/companion/cover-letter?item=a', 'GET') === 60000 && requestTimeoutMs('/api/companion/resume', 'GET') === 60000,
+      'worker deadline: 60s for the binary downloads');
+  }
+
+  // Worker, api(): drive the shipped function with a stubbed fetch/chrome and
+  // recorded timers. The deadline is shortened; everything else is as shipped.
+  ok(/^let requestsInFlight = 0;$/m.test(SW) && /^let keepAliveTimer = null;$/m.test(SW),
+    'sw.js declares the keep-alive counter and timer at module scope (the harness below mirrors them)');
+  const apiSrc = [withAsync(SW, 'keepAliveWhile'), withAsync(SW, 'api')].join('\n');
+  const loadApi = ({ fetch, timeoutMs = 40 }) => {
+    const intervals = [];
+    const cleared = [];
+    const platformCalls = { n: 0 };
+    const chrome = { runtime: { getPlatformInfo: async () => { platformCalls.n += 1; return {}; } } };
+    const setIntervalFn = (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; };
+    const clearIntervalFn = (id) => { cleared.push(id); };
+    const worker = new Function('chrome', 'fetch', 'setInterval', 'clearInterval', `
+      let requestsInFlight = 0;
+      let keepAliveTimer = null;
+      const NOT_CONFIGURED = 'not configured';
+      const getConfig = async () => ({ baseUrl: 'http://s:8377', token: 't' });
+      const importBundledConfig = async () => ({ imported: false });
+      const requestTimeoutMs = () => ${timeoutMs};
+      ${apiSrc}
+      return { api, inFlight: () => requestsInFlight, timer: () => keepAliveTimer };
+    `)(chrome, fetch, setIntervalFn, clearIntervalFn);
+    return { worker, intervals, cleared, platformCalls };
+  };
+  const jsonRes = (body, status = 200) => ({
+    ok: status < 400, status, headers: { get: () => null }, json: async () => body,
+  });
+  // A fetch that answers only when told to — or when its signal aborts.
+  const heldFetch = () => {
+    const held = [];
+    const fetch = (url, opts) => new Promise((resolve, reject) => {
+      held.push({ url, resolve });
+      opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })));
+    });
+    return { fetch, held };
+  };
+
+  await (async () => {
+    {
+      const { fetch, held } = heldFetch();
+      const { worker, intervals, cleared, platformCalls } = loadApi({ fetch, timeoutMs: 60000 });
+      const pending = worker.api('/api/companion/draft?id=j1');
+      await new Promise((r) => setTimeout(r, 5));
+      ok(intervals.length === 1 && intervals[0].ms === 20000 && worker.inFlight() === 1,
+        'while a request is open the worker runs one 20s keep-alive');
+      await intervals[0].fn();
+      ok(platformCalls.n === 1, 'the keep-alive tick calls a trivial extension API (chrome.runtime.getPlatformInfo), which is what resets Chrome\'s idle timer');
+      const second = worker.api('/api/companion/plan?url=');
+      await new Promise((r) => setTimeout(r, 5));
+      ok(intervals.length === 1 && worker.inFlight() === 2, 'concurrent requests share the one keep-alive');
+      held[0].resolve(jsonRes({ ok: true, job: { id: 'j1', status: 'running' } }));
+      const first = await pending;
+      ok(first.ok === true && first.job.id === 'j1' && cleared.length === 0,
+        'the first answer comes back as before, and the keep-alive stays while the other request is open');
+      held[1].resolve(jsonRes({ ok: true, mode: 'profile' }));
+      await second;
+      ok(cleared.length === 1 && worker.inFlight() === 0 && worker.timer() === null,
+        'the keep-alive stops once the last open request settles — an idle worker is still allowed to sleep');
+    }
+    {
+      const { fetch } = heldFetch();
+      const { worker, cleared } = loadApi({ fetch, timeoutMs: 30 });
+      const t0 = Date.now();
+      const res = await worker.api('/api/companion/draft?id=j1');
+      ok(res.ok === false && res.timeout === true && /did not answer within/.test(res.error) && Date.now() - t0 < 2000,
+        'a request that never answers is cut off at its deadline and comes back as an ordinary error — the worker always answers');
+      ok(cleared.length === 1 && worker.inFlight() === 0, 'and the keep-alive is released with it');
+    }
+    {
+      const { worker } = loadApi({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
+      const res = await worker.api('/api/companion/plan?url=');
+      ok(res.ok === false && !res.timeout && /cannot reach the career-ops server: Failed to fetch/.test(res.error),
+        'a network failure is still reported as unreachable, not as a timeout');
+    }
+    {
+      const pdf = new TextEncoder().encode('%PDF-1.4 test');
+      const fetch = async () => ({
+        ok: true, status: 200,
+        headers: { get: (h) => ({ 'content-disposition': 'attachment; filename="DavidC_CoverLetter_Vesta_SE.pdf"', 'content-type': 'application/pdf' }[h] || null) },
+        arrayBuffer: async () => pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength),
+      });
+      const { worker } = loadApi({ fetch });
+      const res = await worker.api('/api/companion/cover-letter?item=2218-vesta');
+      ok(res.ok === true && res.filename === 'DavidC_CoverLetter_Vesta_SE.pdf' && Buffer.from(res.b64, 'base64').toString() === '%PDF-1.4 test',
+        'the cover-letter PDF still arrives base64-encoded under the server\'s filename');
+    }
+  })();
+
+  // Worker, onMessage: a case that throws still answers.
+  ok(/\}\)\(\)\.catch\(\(err\) => \{[\s\S]{0,700}?sendResponse\(\{ ok: false, error: `the extension could not handle that request/.test(SW),
+    'the worker\'s message handler answers even when a case throws — an unanswered message is the "channel closed" error');
+
+  // Panel, send(): drive the shipped function against a stubbed runtime.
+  const sendSrc = [
+    extractMultilineConst(COMPANION, 'RESENDABLE'),
+    extractConst(COMPANION, 'CHANNEL_LOST_RE'),
+    extractConst(COMPANION, 'CONTEXT_GONE_RE'),
+    extractConst(COMPANION, 'RELOAD_PAGE'),
+    extractConst(COMPANION, 'extensionAlive'),
+    withAsync(COMPANION, 'send'),
+  ].join('\n');
+  const loadSend = (sendMessage, { id } = { id: 'ext-id' }) => {
+    const calls = [];
+    const chrome = { runtime: { id, sendMessage: (msg) => { calls.push(msg.type); return sendMessage(msg, calls.length); } } };
+    return { ...new Function('chrome', `${sendSrc}\nreturn { send, RESENDABLE, RELOAD_PAGE };`)(chrome), calls };
+  };
+  const CLOSED = 'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received';
+
+  await (async () => {
+    let escaped = null;
+    try {
+      {
+        const s = loadSend(async (msg, n) => { if (n === 1) throw new Error(CLOSED); return { ok: true, b64: 'AA==', filename: 'x.pdf' }; });
+        const r = await s.send({ type: 'companion:getCoverLetter', item: 'a' });
+        ok(r.ok === true && r.filename === 'x.pdf' && s.calls.length === 2,
+          'send(): a read whose channel closed is asked again once, and the second answer is what the caller gets');
+      }
+      {
+        const s = loadSend(async () => { throw new Error(CLOSED); });
+        const r = await s.send({ type: 'companion:getDraftJob', id: 'j' });
+        ok(r.ok === false && r.transport === 'lost' && s.calls.length === 2 && /Lost contact/.test(r.error),
+          'send(): a read that loses the channel twice comes back as { ok:false, transport:"lost" } — never a rejection');
+      }
+      {
+        const s = loadSend(async () => { throw new Error(CLOSED); });
+        const r = await s.send({ type: 'companion:getDraft', questions: ['q'] });
+        ok(r.ok === false && r.transport === 'lost' && s.calls.length === 1,
+          'send(): a request that starts a model call is never re-sent automatically');
+      }
+      {
+        const s = loadSend(() => { throw new Error('Extension context invalidated.'); });
+        const r = await s.send({ type: 'companion:getResume' });
+        ok(r.ok === false && r.transport === 'invalidated' && r.error === s.RELOAD_PAGE && /reload this page/.test(r.error),
+          'send(): a panel orphaned by an extension reload says to reload the page (a synchronous throw is caught too)');
+      }
+      {
+        const s = loadSend(async () => { throw new Error(CLOSED); }, { id: undefined });
+        const r = await s.send({ type: 'companion:getPlan' });
+        ok(r.transport === 'invalidated' && s.calls.length === 1,
+          'send(): no chrome.runtime.id left means the context is gone — reported as such, not retried');
+      }
+      {
+        const s = loadSend(async () => ({ ok: true, mode: 'item' }));
+        const r = await s.send({ type: 'companion:getPlan', url: 'u' });
+        ok(r.ok === true && r.mode === 'item' && s.calls.length === 1, 'send(): an ordinary answer passes straight through');
+      }
+      {
+        const s = loadSend(async () => { throw new Error('Message length exceeded maximum allowed length.'); });
+        const r = await s.send({ type: 'companion:broadcast', payload: {} });
+        ok(r.ok === false && r.transport === 'error' && /Message length exceeded/.test(r.error),
+          'send(): any other messaging failure is reported with its own words');
+      }
+    } catch (err) {
+      escaped = err;
+    }
+    ok(escaped === null, `send() never rejects${escaped ? ` (escaped: ${escaped.message})` : ''}`);
+  })();
+
+  {
+    const { RESENDABLE } = new Function('chrome', `${sendSrc}\nreturn { RESENDABLE };`)({ runtime: {} });
+    const never = ['companion:getDraft', 'companion:liveFill', 'companion:processPage', 'companion:generateMessage',
+      'companion:broadcast', 'companion:submitIntent', 'companion:submitConfirmed', 'companion:observe',
+      'companion:promoteField', 'companion:forgetLearned', 'companion:deleteAnswer'];
+    ok(never.every((t) => !RESENDABLE.has(t)),
+      'nothing that spends a model call, changes the pipeline or re-broadcasts to the page is in the re-send list');
+    const unknown = [...RESENDABLE].filter((t) => !SW.includes(`case '${t}'`));
+    ok(unknown.length === 0, `every re-sendable message type is one the worker handles${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`);
+  }
+
+  // Panel, the polling loops stop once the extension is unreachable for good.
+  ok(/p && p\.transport === 'invalidated'\) return p;/.test(extractFunction(COMPANION, 'requestDraft')),
+    'requestDraft stops polling (and says why) once the panel is orphaned by an extension reload');
+  ok(/res && res\.transport === 'invalidated'/.test(extractFunction(COMPANION, 'watchRequest')),
+    'watchRequest does the same for "process this page"');
+
+  // Panel, a manual Attach that no frame answers says so.
+  ok(/expectAttachAnswer\('resume', r\.filename\);\s*broadcast\(\{ type: 'companion:attachResume'/.test(COMPANION)
+    && /expectAttachAnswer\('cover_letter_file', r\.filename\);\s*broadcast\(\{ type: 'companion:attachCoverLetter'/.test(COMPANION),
+  'both manual Attach buttons wait for an answer before broadcasting');
+  ok(/panelBus\['companion:resumeAttached'\] = \(\{ ok \}\) => \{\s*settleAttachWait\('resume'\);/.test(COMPANION)
+    && /panelBus\['companion:coverLetterAttached'\] = \(\{ ok \}\) => \{\s*settleAttachWait\('cover_letter_file'\);/.test(COMPANION),
+  'an attach result from any frame settles the wait');
+  {
+    const timers = [];
+    const statuses = [];
+    const src = `
+      const rowStatus = new Map();
+      const setStatusLine = (text, isError = false) => statuses.push({ text, isError });
+      const paintStatuses = () => {};
+      const setTimeout = (fn, ms) => { timers.push({ fn, ms, live: true }); return timers.length - 1; };
+      const clearTimeout = (id) => { if (timers[id]) timers[id].live = false; };
+      ${extractConst(COMPANION, 'ATTACH_ANSWER_MS')}
+      ${extractConst(COMPANION, 'attachWaits')}
+      ${extractFunction(COMPANION, 'expectAttachAnswer')}
+      ${extractFunction(COMPANION, 'settleAttachWait')}
+      return { expectAttachAnswer, settleAttachWait, rowStatus };
+    `;
+    const panel = new Function('timers', 'statuses', src)(timers, statuses);
+    panel.expectAttachAnswer('cover_letter_file', 'DavidC_CoverLetter_Vesta_SE.pdf');
+    ok(statuses.at(-1).text === 'Attaching DavidC_CoverLetter_Vesta_SE.pdf…', 'the status line moves on from "Fetching…" as soon as the file is in hand');
+    timers[0].fn();
+    ok(/no cover-letter upload field/.test(statuses.at(-1).text) && statuses.at(-1).isError && panel.rowStatus.get('cover_letter_file') === 'notfound',
+      'no frame answering means no upload field: the panel says so and marks the row');
+    panel.expectAttachAnswer('resume', 'DavidC_CV.pdf');
+    panel.settleAttachWait('resume');
+    ok(timers[1].live === false, 'an answer from a frame cancels the "not found" message');
+  }
 }
 
 // ── item #7: panel drag clamps to the viewport at every extreme ───────────
@@ -1212,7 +1537,9 @@ export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
     'attachFile is guarded (a bad file/DataTransfer failure never throws out of the fill loop)');
 }
 
-// ── manifest: patch bump for the item #1/#2 fix ────────────────────────────
+// ── manifest: patch bump for the Ashby attach + worker-channel fix ─────────
+// The version is how the candidate can tell, on chrome://extensions, that a
+// reload actually picked up a fix.
 {
-  ok(MANIFEST.version === '0.4.1', 'manifest version bumped to 0.4.1 for the typed-input guard + keyboard isolation fix');
+  ok(MANIFEST.version === '0.4.2', 'manifest version bumped to 0.4.2 for the Ashby attach targeting + worker-channel fix');
 }

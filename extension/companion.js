@@ -788,7 +788,12 @@
         website: ['input[name*="website" i]', 'input[name*="portfolio" i]'],
         github: ['input[name*="github" i]'],
       },
-      resume: ['input[name="_systemfield_resume"]', 'input[accept*=".pdf"]'],
+      // The id first: on current Ashby forms the Resume question's input is
+      // #_systemfield_resume with an EMPTY name attribute, so the name=
+      // selector alone matched nothing. The old second entry, any input
+      // accepting ".pdf", then matched Ashby's "Autofill from resume" box
+      // above the form instead — see isAutofillFileInput for what that did.
+      resume: ['#_systemfield_resume', 'input[name="_systemfield_resume"]'],
       cover: ['textarea[name*="cover" i]'],
     },
   ];
@@ -1216,47 +1221,103 @@
     return results;
   }
 
-  // The pre-cover-letter-exclusion resume lookup — findCoverLetterInput's
-  // generic fallback (rule 3, below) needs this to know which file input the
-  // OLD unguarded logic would have picked, so it never claims that same
-  // input as the cover letter. Kept private so the two functions can each
-  // call the other's "raw" half without recursing into one another.
+  // A résumé PARSER box is not an upload question. Ashby's application pages
+  // now open with an "Autofill from resume" box above the form: a file input
+  // of its own that hands the file to Ashby's parser to prefill fields, while
+  // the application's actual resume is the Resume question further down. The
+  // box accepts the same .pdf/.doc/.docx and comes FIRST in the DOM, so every
+  // "first PDF-accepting file input" rung picked it: the resume went into the
+  // parser, and the cover letter — "whichever file input the resume did not
+  // claim" — went into the real Resume field, replacing the resume. Measured
+  // on a live Ashby form (2026-09-21): exactly two file inputs, the parser's
+  // (no id, no name) and #_systemfield_resume (an empty name).
+  //
+  // Evidence is the input's own label and nearest container, and the class
+  // names of the input and its two closest ancestors (where Ashby's
+  // "…-autofill-input-root" and "_autofillPane_…" sit, and which still says
+  // so on a board whose visible text is not in English) — never a wider
+  // wrapper, and never the whole page, whose text can mention autofill anywhere.
+  const AUTOFILL_INPUT_RE = /auto-?fill/i;
+  function fileInputContext(el) {
+    const box = el.closest ? el.closest('div,fieldset') : null;
+    return `${labelFor(el)} ${clean(box ? box.innerText : '').slice(0, 200)}`;
+  }
+  function isAutofillFileInput(el) {
+    let node = el;
+    for (let hops = 0; node && hops < 3; hops += 1, node = node.parentElement) {
+      if (typeof node.className === 'string' && AUTOFILL_INPUT_RE.test(node.className)) return true;
+    }
+    return AUTOFILL_INPUT_RE.test(fileInputContext(el));
+  }
+  // The file inputs that are questions on the form, in page order — parser
+  // boxes left out. `visibleOnly` is the cover-letter lookup's own old rule.
+  function realFileInputs({ visibleOnly = false } = {}) {
+    return [...document.querySelectorAll('input[type="file"]')]
+      .filter((el) => (!visibleOnly || visible(el)) && !isAutofillFileInput(el));
+  }
+  // An input's OWN label: the explicit <label>, aria-label or aria-labelledby,
+  // without labelFor's nearby-text fallback, which on an unlabelled input can
+  // read a neighbouring question's wording.
+  function ownLabel(el) {
+    if (el.labels && el.labels.length) return clean(el.labels[0].textContent);
+    const aria = clean(el.getAttribute && el.getAttribute('aria-label'));
+    if (aria) return aria;
+    const ids = el.getAttribute && el.getAttribute('aria-labelledby');
+    return ids ? clean(ids.split(/\s+/).map((i) => document.getElementById(i)?.textContent || '').join(' ')) : '';
+  }
+
+  // The resume lookup without the cover-letter exclusion —
+  // findCoverLetterInput's positional rung (below) needs it to know which
+  // input is the resume, so it never claims that same input as the cover
+  // letter. Kept private so the two functions can each call the other's
+  // "raw" half without recursing into one another. A pack selector is
+  // trusted as it stands; past it, the form's own upload questions come
+  // before a parser box.
   function findResumeInputRaw() {
     const pack = atsPack();
     for (const sel of (pack && pack.resume) || []) {
       const el = document.querySelector(sel);
       if (el && el.type === 'file') return el;
     }
-    return document.querySelector('input[type="file"]');
+    return realFileInputs()[0] || document.querySelector('input[type="file"]');
   }
 
   // Item #3's actual fix: a real file attachment, not just the text-area
   // insert `runFill`'s cover-letter block already does unconditionally. Three
   // rungs: a pack's own dedicated selector, a label/accept/nearby-text match,
-  // then "whichever file input findResumeInput did NOT claim" — a page with
-  // exactly two file inputs and no other signal is almost always resume +
-  // cover letter, in some order.
+  // then a positional guess — a form with exactly two upload questions and no
+  // other signal is almost always resume + cover letter, in some order. The
+  // guess is ONLY that case: a parser box is not a question (see
+  // isAutofillFileInput), a third upload makes it a guess among strangers,
+  // and an input whose own label names another document (a portfolio, a
+  // transcript) is that document's slot. A form that asks for no cover letter
+  // gets none — the panel says so, and ⬇ still downloads the PDF.
   const COVER_LETTER_RE = /cover\s*letter|letter of interest|motivation letter/i;
+  const OTHER_DOCUMENT_RE = /\b(?:r[eé]sum[eé]|cv\b|curriculum vitae|transcript|portfolio|writing sample|work sample|photo|headshot|passport|diploma|certificat|recommendation|reference)/i;
   function findCoverLetterInput() {
     const pack = atsPack();
     for (const sel of (pack && pack.coverFile) || []) {
       const el = document.querySelector(sel);
       if (el && el.type === 'file') return el;
     }
-    const fileInputs = [...document.querySelectorAll('input[type="file"]')].filter(visible);
+    const fileInputs = realFileInputs({ visibleOnly: true });
     for (const el of fileInputs) {
-      const context = `${labelFor(el)} ${el.getAttribute('accept') || ''} ${clean(el.closest('div,fieldset')?.innerText || '').slice(0, 200)}`;
-      if (COVER_LETTER_RE.test(context)) return el;
+      if (COVER_LETTER_RE.test(`${fileInputContext(el)} ${el.getAttribute('accept') || ''}`)) return el;
     }
     const resumeInput = findResumeInputRaw();
-    return fileInputs.find((el) => el !== resumeInput) || null;
+    if (fileInputs.length !== 2 || !fileInputs.includes(resumeInput)) return null;
+    const other = fileInputs.find((el) => el !== resumeInput);
+    return other && !OTHER_DOCUMENT_RE.test(ownLabel(other)) ? other : null;
   }
 
   // findResumeInput now excludes whatever findCoverLetterInput claims, so the
   // two rows in the panel never fight over the same input (a page with one
   // dedicated cover-letter file input and one plain "upload a file" resume
   // input used to have BOTH resolve to the generic input, whichever ran
-  // first).
+  // first). Past the pack, a form's own upload question comes before a parser
+  // box, and the box is used only when it is the one file input left — a
+  // Workday "Autofill with Resume" step is exactly that, and uploading there
+  // is the point of the step.
   function findResumeInput() {
     const cover = findCoverLetterInput();
     const pack = atsPack();
@@ -1264,7 +1325,8 @@
       const el = document.querySelector(sel);
       if (el && el.type === 'file' && el !== cover) return el;
     }
-    return [...document.querySelectorAll('input[type="file"]')].find((el) => el !== cover) || null;
+    const others = [...document.querySelectorAll('input[type="file"]')].filter((el) => el !== cover);
+    return others.find((el) => !isAutofillFileInput(el)) || others[0] || null;
   }
 
   // ── submission detection ──────────────────────────────────────────────────
@@ -1645,7 +1707,53 @@
   let lastAssistDraft = null; // { question, text }
   let messageDraft = { context: '', out: '', key: null }; // survives tab switches
 
-  const send = (msg) => chrome.runtime.sendMessage(msg);
+  // Every panel → worker request goes through here, and it never rejects.
+  // chrome.runtime.sendMessage fails in two ways that say nothing about the
+  // request itself, and each used to escape as an "Uncaught (in promise)" on
+  // the extension's Errors page — killing the click handler mid-way, so the
+  // status line froze on "Fetching cover letter…" or "Drafting…" and nothing
+  // said why:
+  //   - "the message channel closed before a response was received": the
+  //     worker was stopped while it held the request (sw.js now keeps it up
+  //     for a request's length, but an update or Chrome itself can still stop
+  //     it). A fresh worker starts on the next message, so a READ is simply
+  //     asked again, once.
+  //   - "Extension context invalidated": the extension was reloaded or
+  //     updated after this page loaded. This copy of the panel can never reach
+  //     the new worker; only reloading the page can.
+  // Both come back as an ordinary { ok:false, error }, which every caller
+  // already shows. Nothing that spends a model call or changes the pipeline
+  // (a draft, live fill, process, generate, a broadcast) is re-sent here.
+  const RESENDABLE = new Set([
+    'companion:getPlan', 'companion:getDraftJob', 'companion:getRequest', 'companion:getResume',
+    'companion:getCoverLetter', 'companion:getAnswers', 'companion:getKbStatus', 'companion:getLearned',
+    'companion:getLiveFillNextSteps', 'companion:getPanelPos', 'companion:getPanelCollapsed',
+    'companion:setTabLink', 'companion:clearTabLink', 'companion:setPanelOpen', 'companion:setLiveFillNextSteps',
+    'companion:setPanelPos', 'companion:resetPanelPos', 'companion:setPanelCollapsed', 'companion:link',
+  ]);
+  const CHANNEL_LOST_RE = /message (?:channel|port) closed|receiving end does not exist/i;
+  const CONTEXT_GONE_RE = /extension context invalidated/i;
+  const RELOAD_PAGE = 'The companion extension was reloaded or updated after this page opened — reload this page to reconnect the panel.';
+  const extensionAlive = () => { try { return Boolean(chrome.runtime && chrome.runtime.id); } catch { return false; } };
+  async function send(msg) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await chrome.runtime.sendMessage(msg);
+      } catch (err) {
+        const text = String((err && err.message) || err || '');
+        if (CONTEXT_GONE_RE.test(text) || !extensionAlive()) return { ok: false, transport: 'invalidated', error: RELOAD_PAGE };
+        const lost = CHANNEL_LOST_RE.test(text);
+        if (lost && attempt === 0 && RESENDABLE.has(msg && msg.type)) continue;
+        return {
+          ok: false,
+          transport: lost ? 'lost' : 'error',
+          error: lost
+            ? "Lost contact with the extension's background worker mid-request — try again."
+            : `The extension could not pass that on: ${text.slice(0, 160)}`,
+        };
+      }
+    }
+  }
   // No frameId → every frame. A frameId targets one (the late-form replay).
   const broadcast = (payload, frameId = null) =>
     send({ type: 'companion:broadcast', payload, ...(frameId != null ? { frameId } : {}) });
@@ -1859,11 +1967,13 @@
     );
   };
   panelBus['companion:resumeAttached'] = ({ ok }) => {
+    settleAttachWait('resume');
     rowStatus.set('resume', ok ? 'filled' : 'failed');
     paintStatuses();
     setStatusLine(ok ? 'Resume attached — verify the file name shows on the form.' : 'Could not attach — use Download and add it manually.', !ok);
   };
   panelBus['companion:coverLetterAttached'] = ({ ok }) => {
+    settleAttachWait('cover_letter_file');
     rowStatus.set('cover_letter_file', ok ? 'filled' : 'failed');
     paintStatuses();
     setStatusLine(ok ? 'Cover letter attached — verify the file name shows on the form.' : 'Could not attach — use Download and add it manually.', !ok);
@@ -1907,6 +2017,31 @@
       }, 600),
     };
     broadcast({ type: 'companion:insert', text, nonce });
+  }
+
+  // The same backstop for a manual Attach. An engine that finds no upload
+  // field for the file says nothing at all, so a form with no cover-letter
+  // upload left the status line on "Fetching cover letter…" and the button
+  // looking dead. Only the manual buttons wait for an answer: an automatic
+  // attach on a form that asks for no cover letter is the ordinary case, not
+  // something to report.
+  const ATTACH_ANSWER_MS = 2500;
+  const attachWaits = {};
+  function expectAttachAnswer(key, filename) {
+    clearTimeout(attachWaits[key]);
+    setStatusLine(`Attaching ${filename}…`);
+    attachWaits[key] = setTimeout(() => {
+      delete attachWaits[key];
+      rowStatus.set(key, 'notfound');
+      paintStatuses();
+      setStatusLine(key === 'resume'
+        ? `No resume upload field found on this page — nothing was attached. ⬇ downloads ${filename} to attach by hand.`
+        : `This form has no cover-letter upload field — nothing was attached. ⬇ downloads ${filename} if you want it elsewhere.`, true);
+    }, ATTACH_ANSWER_MS);
+  }
+  function settleAttachWait(key) {
+    clearTimeout(attachWaits[key]);
+    delete attachWaits[key];
   }
 
   async function getResume() {
@@ -2163,7 +2298,11 @@
       const p = await send({ type: 'companion:getDraftJob', id: res.job.id });
       if (!p || !p.ok || !p.job) {
         if (p && p.status === 404) return { ok: false, error: 'the server lost this draft (it may have restarted) — try again' };
-        continue; // a server blip — keep polling, same as watchRequest's own loop
+        // This panel can no longer reach the extension at all — every later
+        // poll would fail the same way. The draft itself still finishes on the
+        // server and lands in Remembered answers for a linked application.
+        if (p && p.transport === 'invalidated') return p;
+        continue; // a server blip or a slow poll — keep polling, same as watchRequest's own loop
       }
       const j = p.job;
       if (j.status === 'queued' || j.status === 'running') {
@@ -2283,6 +2422,11 @@
       await sleep(POLL_MS);
       if (!host || processWatch !== id) return;
       const res = await send({ type: 'companion:getRequest', id });
+      if (res && res.transport === 'invalidated') {
+        processWatch = null;
+        setStatusLine(`${res.error} The evaluation carries on without it — the result lands in the dashboard.`, true);
+        return;
+      }
       if (!res || !res.ok || !res.request) continue; // server blip — keep polling
       const r = res.request;
       if (r.status === 'queued' || r.status === 'running') {
@@ -2530,7 +2674,9 @@
       for (const btn of row.querySelectorAll('button')) btn.addEventListener('mousedown', (e) => e.preventDefault());
       row.querySelector('.co-att').addEventListener('click', async () => {
         const r = await getResume();
-        if (r) broadcast({ type: 'companion:attachResume', b64: r.b64, filename: r.filename, mime: r.mime });
+        if (!r) return;
+        expectAttachAnswer('resume', r.filename);
+        broadcast({ type: 'companion:attachResume', b64: r.b64, filename: r.filename, mime: r.mime });
       });
       row.querySelector('.co-dl').addEventListener('click', async () => {
         const r = await getResume();
@@ -2563,7 +2709,9 @@
       for (const btn of row.querySelectorAll('button')) btn.addEventListener('mousedown', (e) => e.preventDefault());
       row.querySelector('.co-att').addEventListener('click', async () => {
         const r = await getCoverLetterFile();
-        if (r) broadcast({ type: 'companion:attachCoverLetter', b64: r.b64, filename: r.filename, mime: r.mime });
+        if (!r) return;
+        expectAttachAnswer('cover_letter_file', r.filename);
+        broadcast({ type: 'companion:attachCoverLetter', b64: r.b64, filename: r.filename, mime: r.mime });
       });
       row.querySelector('.co-dl').addEventListener('click', async () => {
         const r = await getCoverLetterFile();

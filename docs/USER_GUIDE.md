@@ -338,7 +338,10 @@ later starts fresh.
    to — `JaneD_CV_Google_SEII.pdf` / `JaneD_CoverLetter_Google_SEII.pdf`
    (first name and last initial, the company, the role's initials) — so a
    Downloads folder full of them stays searchable instead of piling up as
-   numbered copies of one name.
+   numbered copies of one name. The cover letter only ever goes into the
+   form's own cover-letter upload: many forms ask for none, and then nothing
+   is attached and the panel says so. A résumé-parser box such as Ashby's
+   "Autofill from resume" is never taken for the Resume question.
 7. **Answer the custom questions** — see the AI tab below, or **✨ Live fill**
    for everything left on the page at once.
 8. **Review the whole form yourself, then click Submit.**
@@ -565,7 +568,9 @@ applied** on the card on your dashboard's Career page.
 
 **Nothing works after a `git pull`.**
 Reload the extension on `chrome://extensions` — content scripts are cached until
-you do.
+you do — then reload any application tab that was already open. A panel opened
+before the reload can no longer reach the extension; it says "reload this page
+to reconnect the panel" when you press a button.
 
 ---
 

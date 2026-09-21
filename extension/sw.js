@@ -95,6 +95,52 @@ importBundledConfig().catch(() => {});
 chrome.runtime.onStartup.addListener(() => { importBundledConfig().catch(() => {}); });
 chrome.runtime.onInstalled.addListener(() => { importBundledConfig().catch(() => {}); });
 
+// ── keeping the worker up for the length of a request ───────────────────────
+// Chrome stops an idle extension worker after 30 seconds, and a pending
+// fetch() is not activity — only events and extension API calls are. So a
+// response slower than that (a busy box, a slow link, a model call behind the
+// route) took the worker down WITH the request: the panel's promise rejected
+// with "A listener indicated an asynchronous response by returning true, but
+// the message channel closed before a response was received", and the click
+// that started it died with nothing on screen. A draft's status poll is the
+// easy way to get there — the panel sends the next poll only once the last
+// one has answered, so one stalled poll leaves the worker with no events at
+// all. Calling a trivial extension API every 20s while any request is open is
+// Chrome's documented way to hold the worker up for the duration (extension
+// service worker lifecycle, "waitUntil").
+let requestsInFlight = 0;
+let keepAliveTimer = null;
+async function keepAliveWhile(promise) {
+  requestsInFlight += 1;
+  if (!keepAliveTimer) {
+    keepAliveTimer = setInterval(() => { chrome.runtime.getPlatformInfo().catch(() => {}); }, 20000);
+  }
+  try {
+    return await promise;
+  } finally {
+    requestsInFlight -= 1;
+    if (requestsInFlight <= 0) {
+      requestsInFlight = 0;
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+    }
+  }
+}
+
+// How long one request may run before the worker answers for it. Staying up
+// is only half of it: a request that never settles would now hold the worker
+// forever and leave the panel on a spinner, so every request also has a
+// deadline and comes back as an ordinary error at the end of it. Generous
+// where a model call sits behind the route — live fill budgets up to 180s
+// server-side, and the ChunkyLink proxy allows 200s for the same reason —
+// tight everywhere else, where a healthy answer takes well under a second and
+// a poll that misses one beat simply polls again.
+function requestTimeoutMs(path, method) {
+  if (method !== 'GET' && /^\/api\/companion\/(live-fill|draft|generate-message)(\?|$)/.test(path)) return 200000;
+  if (/^\/api\/companion\/(resume|cover-letter|process)(\?|$)/.test(path)) return 60000;
+  return 30000;
+}
+
 async function api(path, { method = 'GET', body = null, retried = false } = {}) {
   let { baseUrl, token } = await getConfig();
   if (!baseUrl || !token) {
@@ -105,43 +151,54 @@ async function api(path, { method = 'GET', body = null, retried = false } = {}) 
   if (!baseUrl || !token) {
     return { ok: false, error: NOT_CONFIGURED };
   }
+  const timeoutMs = requestTimeoutMs(path, method);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    // A rejected token, when the file on disk has moved on (setup --recheck
-    // after a rotation), is the file's cue to take over: one retry, then the
-    // 401 is reported like any other failure.
-    if (res.status === 401 && !retried && (await importBundledConfig({ rejected: true })).imported) {
-      return api(path, { method, body, retried: true });
-    }
-    // Both binary downloads (resume, and item #3's cover-letter PDF) share
-    // this shape: base64-encode over the message channel, decode in the
-    // content script that actually attaches/downloads the file.
-    if (path.includes('/resume') || path.includes('/cover-letter')) {
-      const label = path.includes('/cover-letter') ? 'cover letter' : 'resume';
-      if (!res.ok) return { ok: false, error: `${label} fetch failed (${res.status})` };
-      const buf = await res.arrayBuffer();
-      let binary = '';
-      const bytes = new Uint8Array(buf);
-      const CHUNK = 0x8000;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    return await keepAliveWhile((async () => {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(body ? { 'content-type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      // A rejected token, when the file on disk has moved on (setup --recheck
+      // after a rotation), is the file's cue to take over: one retry, then the
+      // 401 is reported like any other failure.
+      if (res.status === 401 && !retried && (await importBundledConfig({ rejected: true })).imported) {
+        return api(path, { method, body, retried: true });
       }
-      const disposition = res.headers.get('content-disposition') || '';
-      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || (label === 'cover letter' ? 'CoverLetter.pdf' : 'Resume.pdf');
-      return { ok: true, b64: btoa(binary), filename, mime: res.headers.get('content-type') || 'application/pdf' };
-    }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data.error || `request failed (${res.status})`, status: res.status };
-    return { ok: true, ...data };
+      // Both binary downloads (resume, and item #3's cover-letter PDF) share
+      // this shape: base64-encode over the message channel, decode in the
+      // content script that actually attaches/downloads the file.
+      if (path.includes('/resume') || path.includes('/cover-letter')) {
+        const label = path.includes('/cover-letter') ? 'cover letter' : 'resume';
+        if (!res.ok) return { ok: false, error: `${label} fetch failed (${res.status})` };
+        const buf = await res.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(buf);
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+        }
+        const disposition = res.headers.get('content-disposition') || '';
+        const filename = disposition.match(/filename="([^"]+)"/)?.[1] || (label === 'cover letter' ? 'CoverLetter.pdf' : 'Resume.pdf');
+        return { ok: true, b64: btoa(binary), filename, mime: res.headers.get('content-type') || 'application/pdf' };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data.error || `request failed (${res.status})`, status: res.status };
+      return { ok: true, ...data };
+    })());
   } catch (err) {
+    if (controller.signal.aborted) {
+      return { ok: false, timeout: true, error: `the career-ops server did not answer within ${Math.round(timeoutMs / 1000)}s — try again` };
+    }
     return { ok: false, error: `cannot reach the career-ops server: ${String(err && err.message || err)}` };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -780,6 +837,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       default:
         sendResponse({ ok: false, error: 'unknown message' });
     }
-  })();
+  })().catch((err) => {
+    // Every case above answers. This is for one that throws before it can:
+    // an unanswered message is what the panel sees as "the message channel
+    // closed", long after the fact and with nothing to say what went wrong.
+    console.warn('companion: message handler failed', msg && msg.type, err);
+    try {
+      sendResponse({ ok: false, error: `the extension could not handle that request: ${String((err && err.message) || err).slice(0, 200)}` });
+    } catch { /* the channel is already gone */ }
+  });
   return true; // async sendResponse
 });
