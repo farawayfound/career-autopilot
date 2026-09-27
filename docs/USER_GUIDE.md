@@ -290,10 +290,24 @@ Once a page is matched or linked, the extension remembers it for that browser
 tab: every later Continue/Next-step page in the **same** application
 re-fills itself automatically, without asking you to pick the item again. The
 panel header shows **"Linked: Company — Role · Unlink"** whenever a link is
-active; click **Unlink** if it ever matches the wrong thing. The link is
-per-tab and clears itself once you submit, once the tab leaves the
-application's site, or when you close the tab — reopening the same posting
-later starts fresh.
+active. The link is per-tab and clears itself once you submit, once the tab
+leaves the application's site, or when you close the tab — reopening the same
+posting later starts fresh.
+
+**Unlink** is for a match that is wrong — two roles at one employer, or the
+same role title at two employers, are the usual ways it happens. Clicking it
+turns auto-link off for that tab: the extension stops matching the pages in
+that tab to your pipeline, on the page you are on and on every page you go to
+next, and the header says **"Auto-link is off in this tab"**. You get the list
+of your applications instead; pick the right one and the tab is linked to it,
+with auto-fill on its next steps as usual. If none applies, carry on from your
+profile. **Turn back on** in the header undoes it. Other tabs are not
+affected, and a new tab starts with auto-link on.
+
+After an Unlink the extension also stops watching that tab for a submit of the
+application you unlinked, so submitting the form will not mark the wrong one
+as applied. If you submit without linking the right application, mark it on
+the dashboard.
 
 ### Manual (fallback, and non-queue pages)
 

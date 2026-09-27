@@ -1537,9 +1537,9 @@ export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
     'attachFile is guarded (a bad file/DataTransfer failure never throws out of the fill loop)');
 }
 
-// ── manifest: patch bump for the Ashby attach + worker-channel fix ─────────
+// ── manifest: patch bump for the Unlink fix ────────────────────────────────
 // The version is how the candidate can tell, on chrome://extensions, that a
 // reload actually picked up a fix.
 {
-  ok(MANIFEST.version === '0.4.2', 'manifest version bumped to 0.4.2 for the Ashby attach targeting + worker-channel fix');
+  ok(MANIFEST.version === '0.4.3', 'manifest version bumped to 0.4.3 for the Unlink fix (an unlinked tab stays unlinked)');
 }

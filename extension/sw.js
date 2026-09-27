@@ -250,6 +250,9 @@ const setTabLink = async (tabId, item, host) => {
   const m = await sessionGet('tabLink', {});
   m[tabId] = { item, host: host || '', since: Date.now() };
   await sessionSet('tabLink', m);
+  // A link is the candidate's own answer to "which application is this", so
+  // it ends an earlier Unlink on the same tab (autoLinkOff, below).
+  await clearAutoLinkOff(tabId);
 };
 // Clearing the link also clears the per-tab "live-fill next steps" tick —
 // the tick's whole meaning is "for the rest of THIS linked application", so
@@ -274,8 +277,78 @@ const setLiveFillNextSteps = async (tabId, value) => {
   await sessionSet('liveFillNextSteps', m);
 };
 
+// ── Unlink: the candidate said "not this application" ───────────────────────
+// Unlink used to clear tabLink and nothing else. The panel's own reload, one
+// line after the click, then asked the server to match the page's URL, got
+// the same queue item back and linked the tab again before anything on
+// screen had changed — so a wrong match (two roles at one employer, one role
+// title at two employers) could not be undone at all. The tab now remembers
+// the decision. While the mark stands nothing links this tab by itself: a
+// plan load carries no URL to match (planFor) and a navigation starts no
+// auto-run (maybeAutoRun). Only the candidate ends it, by picking an
+// application (setTabLink) or by turning auto-link back on in the panel.
+// `item` is the application that was unlinked, so the picker never suggests
+// it straight back. Per tab, and gone with the tab or the browser session,
+// like the link it replaces.
+const autoLinkOffOf = async (tabId) => (await sessionGet('autoLinkOff', {}))[tabId] || null;
+const setAutoLinkOff = async (tabId, item) => {
+  const m = await sessionGet('autoLinkOff', {});
+  m[tabId] = { item: item || null, since: Date.now() };
+  await sessionSet('autoLinkOff', m);
+};
+const clearAutoLinkOff = async (tabId) => {
+  const m = await sessionGet('autoLinkOff', {});
+  if (!(tabId in m)) return;
+  delete m[tabId];
+  await sessionSet('autoLinkOff', m);
+};
+
+// The Unlink button. Everything that still points this tab at the application
+// goes in one step, because any one of them left behind acts on it later: the
+// link (a navigation would re-fill from it), a submit intent already recorded
+// for it, and the item each frame's engine reports a submit for — armed by
+// the fill that ran while the wrong link stood, and otherwise still there
+// when the candidate submits the form they went on to fill by hand, which
+// would move the WRONG tracker row to Applied.
+async function unlinkTab(tabId, item) {
+  const link = await tabLinkOf(tabId);
+  const unlinked = item || (link && link.item) || null;
+  await clearTabLink(tabId);
+  await setAutoLinkOff(tabId, unlinked);
+  const pending = (await sessionGet('pendingSubmit', {}))[tabId];
+  if (pending && (!unlinked || pending.item === unlinked)) await clearPendingSubmit(tabId);
+  chrome.tabs.sendMessage(tabId, { type: 'companion:unwatch', item: unlinked }).catch(() => {});
+  try {
+    await chrome.action.setBadgeText({ tabId, text: '' });
+  } catch { /* tab already gone */ }
+}
+
+// The plan a panel asked for. An explicit item is the candidate's own pick
+// (the picker, the Link button, a page they had processed) and is always
+// honored. Without one the server matches the page's URL to a queue item —
+// the one thing a tab the candidate unlinked must not do, so that tab asks
+// without the URL and gets what Unlink promises: the profile-only plan and
+// the list to pick from. The page's title hints still go, so the picker can
+// still suggest an application — any but the one just unlinked.
+async function planFor(tabId, msg) {
+  const off = !msg.item && tabId != null ? await autoLinkOffOf(tabId) : null;
+  // title/h1/company (item #8): hints for the plan route's rankCandidates()
+  // when no hard URL match exists, sent by the panel from quickPageHints() —
+  // never sent alongside an explicit item id (loadPlan only computes them for
+  // an itemless load).
+  const params = new URLSearchParams({ url: off ? '' : (msg.url || '') });
+  if (msg.item) params.set('item', msg.item);
+  if (msg.title) params.set('title', msg.title);
+  if (msg.h1) params.set('h1', msg.h1);
+  if (msg.company) params.set('company', msg.company);
+  const plan = await api(`/api/companion/plan?${params.toString()}`);
+  if (!off || !plan || !plan.ok) return plan;
+  const suggested = plan.suggested && plan.suggested.id === off.item ? null : (plan.suggested || null);
+  return { ...plan, suggested, auto_link_off: true };
+}
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit', 'tabLink', 'panelOpen', 'liveFillNextSteps']) {
+  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit', 'tabLink', 'autoLinkOff', 'panelOpen', 'liveFillNextSteps']) {
     const map = await sessionGet(key, {});
     if (tabId in map) { delete map[tabId]; await sessionSet(key, map); }
   }
@@ -348,6 +421,11 @@ async function maybeAutoRun(tabId, url) {
       if (stillLinked) {
         const plan = await api(`/api/companion/plan?url=${encodeURIComponent(url)}&item=${encodeURIComponent(link.item)}`);
         if (plan && plan.ok && plan.mode === 'item') {
+          // The candidate can unlink (or link something else) while that
+          // request is out, and the answer is then about a link that no
+          // longer stands — sending it on would put the link straight back.
+          const current = await tabLinkOf(tabId);
+          if (!current || current.item !== link.item) return;
           await injectCompanion(tabId);
           const reopen = await panelOpenOf(tabId);
           await chrome.tabs.sendMessage(tabId, { type: 'companion:autorun', relink: true, item: link.item, reopen }, { frameId: 0 }).catch(() => {});
@@ -368,6 +446,11 @@ async function maybeAutoRun(tabId, url) {
       // ordinary URL-match gate below like an unlinked tab.
       await clearTabLink(tabId);
     }
+    // A tab the candidate unlinked is not matched again behind their back: no
+    // lookup, no badge, no auto-run, on this page or any later one in the tab.
+    // Unrecorded on purpose, so the page is looked up as usual once they turn
+    // auto-link back on.
+    if (await autoLinkOffOf(tabId)) return;
     const { autoRun, autoRunAll } = await getSettings();
     if (!autoRun) return;
     if (await autoRanUrl(tabId) === url) return;
@@ -376,6 +459,8 @@ async function maybeAutoRun(tabId, url) {
     // Unconfigured or server down — stay silent AND stay unrecorded, so a
     // later navigation retries instead of writing the URL off permanently.
     if (!plan || !plan.ok) return;
+    // Unlinked while that request was out — same rule, checked again.
+    if (await autoLinkOffOf(tabId)) return;
     await markAutoRan(tabId, url);
     try {
       await chrome.action.setBadgeText({ tabId, text: plan.mode === 'item' ? '✓' : '' });
@@ -575,19 +660,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg.type) {
       // Panel → backend
-      case 'companion:getPlan': {
-        // title/h1/company (item #8): hints for the plan route's
-        // rankCandidates() when no hard URL match exists, sent by the panel
-        // from quickPageHints() — never sent alongside an explicit item id
-        // (loadPlan only computes them for an itemless load).
-        const params = new URLSearchParams({ url: msg.url || '' });
-        if (msg.item) params.set('item', msg.item);
-        if (msg.title) params.set('title', msg.title);
-        if (msg.h1) params.set('h1', msg.h1);
-        if (msg.company) params.set('company', msg.company);
-        sendResponse(await api(`/api/companion/plan?${params.toString()}`));
+      case 'companion:getPlan':
+        sendResponse(await planFor(tabId, msg));
         break;
-      }
       // company/role/jd_excerpt are the page's own hints (companion.js's
       // draftJobHints), forwarded so an ITEMLESS draft — the extension's
       // everyday shape, no queue item yet — still knows which employer the
@@ -679,8 +754,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tabId != null && msg.item) await setTabLink(tabId, msg.item, msg.host || '');
         sendResponse({ ok: true });
         break;
-      case 'companion:clearTabLink':
-        if (tabId != null) await clearTabLink(tabId);
+      // The panel's Unlink button, and the "Turn back on" that undoes it —
+      // see unlinkTab/planFor above for what the mark holds off.
+      case 'companion:unlinkTab':
+        if (tabId != null) await unlinkTab(tabId, msg.item || null);
+        sendResponse({ ok: true });
+        break;
+      case 'companion:resumeAutoLink':
+        if (tabId != null) await clearAutoLinkOff(tabId);
         sendResponse({ ok: true });
         break;
       case 'companion:setPanelOpen':

@@ -1501,6 +1501,15 @@
         });
         sendResponse({ ok: true });
         break;
+      // The candidate unlinked this tab from a queue item. A fill that ran
+      // while the link stood armed this frame to report a submit for that
+      // item, and armSubmitWatch keeps it through a later profile-only fill on
+      // purpose — so without this, submitting the form they went on to fill
+      // by hand would mark the application they had just unlinked as applied.
+      case 'companion:unwatch':
+        if (!msg.item || watchedItem === msg.item) watchedItem = null;
+        sendResponse({ ok: true });
+        break;
       case 'companion:collectQuestions':
         (async () => {
           if (msg.strict && !frameTrusted(msg.topHost)) return;
@@ -1728,8 +1737,9 @@
     'companion:getPlan', 'companion:getDraftJob', 'companion:getRequest', 'companion:getResume',
     'companion:getCoverLetter', 'companion:getAnswers', 'companion:getKbStatus', 'companion:getLearned',
     'companion:getLiveFillNextSteps', 'companion:getPanelPos', 'companion:getPanelCollapsed',
-    'companion:setTabLink', 'companion:clearTabLink', 'companion:setPanelOpen', 'companion:setLiveFillNextSteps',
-    'companion:setPanelPos', 'companion:resetPanelPos', 'companion:setPanelCollapsed', 'companion:link',
+    'companion:setTabLink', 'companion:unlinkTab', 'companion:resumeAutoLink', 'companion:setPanelOpen',
+    'companion:setLiveFillNextSteps', 'companion:setPanelPos', 'companion:resetPanelPos', 'companion:setPanelCollapsed',
+    'companion:link',
   ]);
   const CHANNEL_LOST_RE = /message (?:channel|port) closed|receiving end does not exist/i;
   const CONTEXT_GONE_RE = /extension context invalidated/i;
@@ -1803,6 +1813,35 @@
     return { title: clean(document.title).slice(0, 200), h1: h1.slice(0, 200), company: siteName.slice(0, 120) };
   }
 
+  // Newest load wins. Two can be out at once — a relink auto-run racing the
+  // candidate's own Unlink is the one that matters — and whichever answered
+  // last used to become the plan AND re-send the tab link. loadPlan resolves
+  // false when a later load, or an Unlink, took over while it was out: `plan`
+  // is then not that caller's, and it must not fill from it.
+  let planLoad = 0;
+
+  // Unlink: the candidate says this page is NOT that application. The worker
+  // records it for the tab (sw.js unlinkTab) so nothing links the tab again by
+  // itself — this used to clear the link and reload by URL, which matched the
+  // same application and linked it straight back. The panel lets go of the
+  // plan at once, not when the reload answers: a plan that still names the
+  // application would go on filling from it, and re-arm the submit watch for
+  // it, if that reload failed.
+  async function unlinkThisTab() {
+    const item = plan && plan.item ? plan.item.id : null;
+    planLoad += 1; // a load still out must not put the link back behind this click
+    const res = await send({ type: 'companion:unlinkTab', item });
+    if (!res || !res.ok) {
+      setStatusLine(`Could not unlink — ${(res && res.error) || 'the extension did not answer'}`, true);
+      return;
+    }
+    plan = null;
+    paintLinked();
+    if (activeTab === 'ai') renderAiTab();
+    else renderRows();
+    await loadPlan(null);
+  }
+
   function paintLinked() {
     const el = root.getElementById('co-linked');
     if (!el) return;
@@ -1810,9 +1849,19 @@
       el.hidden = false;
       el.innerHTML = `Linked: ${escHtml(plan.item.company)} — ${escHtml(plan.item.role)} <button class="co-btn" id="co-unlink">Unlink</button>`;
       el.querySelector('#co-unlink').addEventListener('mousedown', (e) => e.preventDefault());
-      el.querySelector('#co-unlink').addEventListener('click', async () => {
-        await send({ type: 'companion:clearTabLink' });
-        setStatusLine('Unlinked — pick another application below, or keep filling from your profile.');
+      el.querySelector('#co-unlink').addEventListener('click', () => unlinkThisTab());
+    } else if (plan && plan.auto_link_off) {
+      // Said out loud, with the way back beside it: a tab that quietly stopped
+      // matching pages would read as the extension having broken.
+      el.hidden = false;
+      el.innerHTML = 'Auto-link is off in this tab. <button class="co-btn" id="co-autolink" title="Match the pages in this tab to your pipeline by their address again">Turn back on</button>';
+      el.querySelector('#co-autolink').addEventListener('mousedown', (e) => e.preventDefault());
+      el.querySelector('#co-autolink').addEventListener('click', async () => {
+        const res = await send({ type: 'companion:resumeAutoLink' });
+        if (!res || !res.ok) {
+          setStatusLine(`Could not turn auto-link back on — ${(res && res.error) || 'the extension did not answer'}`, true);
+          return;
+        }
         await loadPlan(null);
       });
     } else {
@@ -1822,13 +1871,16 @@
   }
 
   async function loadPlan(itemId = null) {
+    planLoad += 1;
+    const load = planLoad;
     setStatusLine('Loading fill plan…');
     const hints = itemId ? {} : quickPageHints();
     const res = await send({ type: 'companion:getPlan', url: location.href, item: itemId, ...hints });
+    if (load !== planLoad) return false;
     if (!res || !res.ok) {
       setStatusLine(res && res.error ? res.error : 'could not load the plan', true);
       renderRows();
-      return;
+      return true;
     }
     plan = res;
     rowStatus.clear();
@@ -1840,7 +1892,9 @@
     paintLinked();
     setStatusLine(plan.mode === 'item'
       ? `Matched: ${plan.item.company} — ${plan.item.role}`
-      : 'No pipeline match — profile-only plan (pick an application below if one applies).');
+      : plan.auto_link_off
+        ? 'Unlinked — pick another application below, or keep filling from your profile.'
+        : 'No pipeline match — profile-only plan (pick an application below if one applies).');
     // Establishing (or re-confirming) the tab link is what closes most of
     // item 8's "re-link on every Continue page" pain — see sw.js's
     // maybeAutoRun relink path, which reads this back on later navigations.
@@ -1853,6 +1907,7 @@
     // its own gate call regardless of which tab is showing (paintFeatureGates
     // is a no-op for AI-tab-only elements when that tab isn't rendered).
     paintFeatureGates();
+    return true;
   }
 
   const fillSummary = (suffix = '') => {
@@ -1908,12 +1963,12 @@
     if (running) return;
     if (msg.relink) {
       if (!host) buildPanel({ show: Boolean(msg.reopen) });
-      await loadPlan(msg.item);
+      if (!(await loadPlan(msg.item))) return;
       if (plan && plan.mode === 'item') fillEverything({ auto: true });
       return;
     }
     if (!host) buildPanel();
-    await loadPlan();
+    if (!(await loadPlan())) return;
     if (plan && plan.mode === 'item') fillEverything({ auto: true });
   };
   // A form frame appeared after the fill ran (Greenhouse embeds, Apply-button
@@ -2404,7 +2459,9 @@
       if (res.duplicate) {
         // Already in the pipeline — go straight to its plan if it is a queue item.
         setStatusLine(res.message || 'Already in your pipeline.');
-        if (res.duplicate === 'queue' && res.item) { await loadPlan(res.item); if (plan && plan.mode === 'item') fillEverything({ auto: true }); }
+        if (res.duplicate === 'queue' && res.item) {
+          if ((await loadPlan(res.item)) && plan && plan.mode === 'item') fillEverything({ auto: true });
+        }
         return;
       }
       setStatusLine(res.message || 'Queued — you can close this page.');
@@ -2444,7 +2501,7 @@
         setStatusLine(`Done: ${r.note || 'evaluated'} — no package to fill from (score below the packaging floor). See the dashboard.`);
         return;
       }
-      await loadPlan(r.queue_id);
+      if (!(await loadPlan(r.queue_id))) return;
       if (plan && plan.mode === 'item') {
         setStatusLine(`Ready: ${plan.item.company} — ${plan.item.role}. Attaching resume and filling…`);
         await fillEverything({ auto: true });
