@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One-click setup for the Career-Ops Companion: installed, connected,
+// One-click setup for the CareerAutopilot Companion: installed, connected,
 // authenticated, configured, and verified — in that order, resuming wherever
 // it left off.
 //
@@ -16,7 +16,7 @@
 //
 // On Windows the usual entry point is double-clicking companion.cmd, which
 // calls this with --launch. On macOS it is companion.command — or, once this
-// script has written it, the "Career-Ops Companion" app in the repo root.
+// script has written it, the "CareerAutopilot Companion" app in the repo root.
 //
 // Three of the steps need a human — Chrome cannot load an unpacked extension
 // from the command line since v137, and nobody can type a password for you.
@@ -39,13 +39,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  DASHBOARD_URL, bundledConfigCurrent, bundledConfigIgnored, bundledConfigPath, configFingerprint,
-  findCompanionExtensions, findExtension, launchArgs, profileDir, profileInUse, resolveBrowser,
-  signedInAccounts, writeBundledConfig,
+  COMPANION_EXTENSION_NAME, DASHBOARD_URL, bundledConfigCurrent, bundledConfigIgnored, bundledConfigPath,
+  configFingerprint, findCompanionExtensions, findExtension, launchArgs, profileDir, profileInUse,
+  resolveBrowser, signedInAccounts, writeBundledConfig,
 } from './launch.mjs';
 import { hasCookiesFor, readConfig, testConnection, withDebugBrowser } from './verify.mjs';
-import { shortcutScript, shortcutSpec, taskbarPinDir } from './shortcut.mjs';
-import { APP_BUNDLE_NAME, appBundleSpec, bundleFiles } from './shortcut-mac.mjs';
+import {
+  LEGACY_SHORTCUT_FILE_NAMES, SHORTCUT_FILE_NAME, shortcutScript, shortcutSpec, taskbarPinDir,
+} from './shortcut.mjs';
+import { APP_BUNDLE_NAME, LEGACY_APP_BUNDLE_NAMES, appBundleSpec, bundleFiles } from './shortcut-mac.mjs';
 import { REPO_ROOT } from '../lib/repo-root.mjs';
 import { flagValue } from '../lib/cli-flags.mjs';
 
@@ -141,7 +143,7 @@ function savedConfig() {
   } catch { return null; }
 }
 
-console.log('\nCareer-Ops Companion — setup');
+console.log(`\n${COMPANION_EXTENSION_NAME} — setup`);
 console.log(`  repo: ${REPO}`);
 
 // ── 1. Node ─────────────────────────────────────────────────────────────────
@@ -206,7 +208,7 @@ if (!browser) {
 say(`✓ ${browser}`);
 
 // ── 4. Server connection ────────────────────────────────────────────────────
-heading('Career-ops server');
+heading('CareerAutopilot server');
 
 function discoverToken() {
   if (process.env.COMPANION_TOKEN) {
@@ -626,11 +628,20 @@ if (WINDOWS) {
   // Refresh every copy that already exists, wherever the candidate put it — a
   // stale Desktop or taskbar copy still pointing at the old target is worse
   // than no copy, because it looks like it works.
-  const shortcutPath = path.join(REPO, 'Career-Ops Companion.lnk');
+  const shortcutPath = path.join(REPO, SHORTCUT_FILE_NAME);
   const targets = [shortcutPath];
   const desktop = desktopPath();
-  const desktopLink = desktop && path.join(desktop, 'Career-Ops Companion.lnk');
-  if (desktopLink && (flag('desktop') || existsSync(desktopLink))) targets.push(desktopLink);
+  const desktopLink = desktop && path.join(desktop, SHORTCUT_FILE_NAME);
+  // A copy under the name used before the rename is one this run would no
+  // longer refresh, so it is replaced by a copy under the current name in the
+  // same place — the repo root, the Desktop — and removed once that is written.
+  const legacyIn = (dir) => (dir
+    ? LEGACY_SHORTCUT_FILE_NAMES.map((name) => path.join(dir, name)).filter((p) => existsSync(p))
+    : []);
+  const legacyCopies = [...legacyIn(REPO), ...legacyIn(desktop)];
+  if (desktopLink && (flag('desktop') || existsSync(desktopLink) || legacyIn(desktop).length)) {
+    targets.push(desktopLink);
+  }
   // The taskbar pin is left alone, deliberately, and this is the expensive
   // lesson: rewriting a pinned .lnk in place makes Explorer re-resolve it
   // against the Taskband registry blob, decide it no longer matches, and
@@ -639,8 +650,11 @@ if (WINDOWS) {
   // Windows has blocked programmatic pinning for years. So: report, never
   // touch, and let the candidate right-click once.
   const pinDir = taskbarPinDir();
-  const pinnedLink = pinDir && path.join(pinDir, 'Career-Ops Companion.lnk');
+  const pinnedLink = pinDir && path.join(pinDir, SHORTCUT_FILE_NAME);
   const pinned = Boolean(pinnedLink && existsSync(pinnedLink));
+  // A pin from before the rename is left alone for the same reason: it still
+  // opens (its target never moved), setup just no longer refreshes it.
+  const legacyPinned = legacyIn(pinDir).length > 0;
 
   const scriptFile = path.join(os.tmpdir(), `career-ops-shortcut-${process.pid}.ps1`);
   writeFileSync(scriptFile, shortcutScript({ spec, paths: targets }), 'utf8');
@@ -650,9 +664,17 @@ if (WINDOWS) {
     say(spec.kind === 'fast'
       ? '✓ opens Chrome directly — no console window, nothing to wait for'
       : `✓ runs companion.cmd — ${spec.why}`);
-    say('✓ Career-Ops Companion.lnk (in the repo root)');
+    say(`✓ ${SHORTCUT_FILE_NAME} (in the repo root)`);
     if (targets.includes(desktopLink)) say(`✓ Desktop (${desktop})`);
-    if (pinned) {
+    for (const old of legacyCopies) rmSync(old, { force: true });
+    if (legacyCopies.length) {
+      say(`✓ removed ${legacyCopies.length} shortcut${legacyCopies.length === 1 ? '' : 's'} named before the rename (${LEGACY_SHORTCUT_FILE_NAMES.join(', ')})`);
+    }
+    if (legacyPinned) {
+      say(`! a taskbar pin named ${LEGACY_SHORTCUT_FILE_NAMES.join(', ')} was left untouched — it still`);
+      say('  opens, but setup no longer refreshes it. Unpin it, then right-click the Desktop');
+      say('  shortcut → Pin to taskbar.');
+    } else if (pinned) {
       say('! a taskbar pin exists and was left untouched — rewriting one makes Explorer delete it.');
       say('  If it no longer opens the right thing: unpin it, then right-click the Desktop');
       say('  shortcut → Pin to taskbar.');
@@ -698,15 +720,33 @@ if (WINDOWS) {
         : `✓ opens Terminal on companion.command — ${spec.why}`);
       say(`✓ ${APP_BUNDLE_NAME} (in the repo root) — drag it onto the Dock to pin it`);
 
+      // A bundle written under the name used before the rename is not
+      // deleted: a Dock pin holds its path, and deleting it would leave a
+      // question mark in the Dock. It becomes a link to the current bundle
+      // instead, so that pin keeps opening the launcher this run just wrote.
+      const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+      for (const legacyName of LEGACY_APP_BUNDLE_NAMES) {
+        const legacyDir = path.join(REPO, legacyName);
+        if (!existsSync(legacyDir) || isLink(legacyDir)) continue;
+        rmSync(legacyDir, { recursive: true, force: true });
+        symlinkSync(APP_BUNDLE_NAME, legacyDir);
+        say(`✓ ${legacyName} is now a link to ${APP_BUNDLE_NAME}, so a Dock pin made before the rename keeps working`);
+        say('  To tidy up: pin the new one, remove the old pin, then delete the link.');
+      }
+
       // The Desktop copy is a symlink to the bundle in the repo, so it can
       // never go stale the way a copied shortcut can — a rerun that flips the
-      // target refreshes every entry point at once.
+      // target refreshes every entry point at once. A Desktop link under the
+      // old name is swapped for one under the current name; only ever a link,
+      // never a real directory someone put there.
       const desktop = path.join(os.homedir(), 'Desktop');
       const desktopApp = path.join(desktop, APP_BUNDLE_NAME);
       const linkThere = (() => { try { lstatSync(desktopApp); return true; } catch { return false; } })();
-      if (existsSync(desktop) && (flag('desktop') || linkThere)) {
+      const legacyDesktopLinks = LEGACY_APP_BUNDLE_NAMES.map((name) => path.join(desktop, name)).filter(isLink);
+      if (existsSync(desktop) && (flag('desktop') || linkThere || legacyDesktopLinks.length)) {
         rmSync(desktopApp, { recursive: true, force: true });
         symlinkSync(appDir, desktopApp);
+        for (const old of legacyDesktopLinks) rmSync(old, { force: true });
         say(`✓ Desktop (a symlink to the repo bundle, so it cannot go stale)`);
       }
     } catch (err) {
@@ -717,8 +757,8 @@ if (WINDOWS) {
   if (process.platform === 'linux') {
     const desktopEntry = path.join(REPO, 'career-ops-companion.desktop');
     writeFileSync(desktopEntry, [
-      '[Desktop Entry]', 'Type=Application', 'Name=Career-Ops Companion',
-      'Comment=Set up and launch the Career-Ops Companion browser',
+      '[Desktop Entry]', 'Type=Application', `Name=${COMPANION_EXTENSION_NAME}`,
+      `Comment=Set up and launch the ${COMPANION_EXTENSION_NAME} browser`,
       `Exec=${command}`, `Icon=${ICON}`, `Path=${REPO}`, 'Terminal=true', 'Categories=Development;',
     ].join('\n') + '\n', 'utf8');
     chmodSync(desktopEntry, 0o755);
@@ -758,7 +798,7 @@ if (outstanding.length) {
 console.log('─'.repeat(66));
 
 if (!flag('launch')) {
-  console.log('\n  Launch it with the "Career-Ops Companion" shortcut, or: npm run companion\n');
+  console.log(`\n  Launch it with the "${COMPANION_EXTENSION_NAME}" shortcut, or: npm run companion\n`);
   process.exit(0);
 }
 

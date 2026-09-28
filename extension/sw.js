@@ -1,4 +1,4 @@
-// Career-Ops Companion — background service worker.
+// CareerAutopilot Companion — background service worker.
 // Owns the backend connection (base URL + bearer token from chrome.storage)
 // and relays messages between the top-frame panel and the per-frame fill
 // engines. Content scripts never see the token.
@@ -194,9 +194,9 @@ async function api(path, { method = 'GET', body = null, retried = false } = {}) 
     })());
   } catch (err) {
     if (controller.signal.aborted) {
-      return { ok: false, timeout: true, error: `the career-ops server did not answer within ${Math.round(timeoutMs / 1000)}s — try again` };
+      return { ok: false, timeout: true, error: `the CareerAutopilot server did not answer within ${Math.round(timeoutMs / 1000)}s — try again` };
     }
-    return { ok: false, error: `cannot reach the career-ops server: ${String(err && err.message || err)}` };
+    return { ok: false, error: `cannot reach the CareerAutopilot server: ${String(err && err.message || err)}` };
   } finally {
     clearTimeout(timer);
   }
@@ -541,7 +541,7 @@ async function reportApplied(tabId, item, evidence) {
     body: { item, evidence: evidence || '' },
   });
   if (!res || !res.ok) {
-    const error = (res && res.error) || 'the career-ops server did not accept the submit';
+    const error = (res && res.error) || 'the CareerAutopilot server did not accept the submit';
     // Count the attempt on the pending record, so an autopilot that stays down
     // for the whole TTL does not re-POST on every SPA route change.
     let attempts = MAX_REPORT_ATTEMPTS;

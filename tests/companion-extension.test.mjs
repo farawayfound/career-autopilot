@@ -430,6 +430,62 @@ const { setEnv, alreadyAnswered, frameTrusted, looksLikeSubmit, ATS_HOST_RE, CON
   ok(swGet.includes('/api/companion/request?id='), 'the worker fetches one request by id');
 }
 
+// ── extractVisibleQuestions applies the same sensitive-field gate as capture ─
+// extension-privacy.md §3 says the companion "deliberately skips password
+// fields" and a set of sensitive topics. collectFinalValues() and harvestForm()
+// both gate every control through isSensitive() before reading it; capturePage()
+// -> extractVisibleQuestions() (the "Process this page" path) did not, so a
+// password input's LABEL text (never its value, but still not nothing) rode
+// along in the up-to-40 "questions" sent to the server. Drive the real,
+// shipped function against stand-in elements the same way the harness above
+// does for alreadyAnswered/frameTrusted.
+{
+  const evqSource = `
+let ELEMENTS = [];
+const document = {
+  querySelectorAll: () => ELEMENTS,
+  getElementById: () => null,
+};
+const CSS = { escape: (s) => String(s).replace(/["\\\\]/g, '\\\\$&') };
+export const setElements = (els) => { ELEMENTS = els; };
+${extractConst(COMPANION, 'clean')}
+${extractConst(COMPANION, 'visible')}
+${extractMultilineConst(COMPANION, 'isComboLike')}
+${extractMultilineConst(COMPANION, 'SENSITIVE_RE')}
+${extractConst(COMPANION, 'SENSITIVE_AUTOCOMPLETE_RE')}
+${extractFunction(COMPANION, 'labelFor')}
+${extractFunction(COMPANION, 'isSensitive')}
+${extractMultilineConst(COMPANION, 'collectControls')}
+${extractFunction(COMPANION, 'extractVisibleQuestions')}
+export { extractVisibleQuestions };
+`;
+  const { setElements, extractVisibleQuestions: extractQuestions } =
+    await import(`data:text/javascript;base64,${Buffer.from(evqSource, 'utf8').toString('base64')}`);
+
+  const el = (props) => ({
+    tagName: 'INPUT',
+    type: 'text',
+    labels: [],
+    offsetParent: {},
+    disabled: false,
+    getAttribute: () => null,
+    closest: () => null,
+    ...props,
+  });
+
+  const passwordField = el({ type: 'password', labels: [{ textContent: 'Create a password to track your application' }] });
+  const otpField = el({
+    labels: [{ textContent: 'Verification code' }],
+    getAttribute: (k) => (k === 'autocomplete' ? 'one-time-code' : null),
+  });
+  const ordinary = el({ labels: [{ textContent: 'What is your notice period?' }] });
+
+  setElements([passwordField, otpField, ordinary]);
+  const questions = extractQuestions();
+  ok(questions.length === 1 && questions[0].label === 'What is your notice period?',
+    'extractVisibleQuestions skips a password input and an autocomplete="one-time-code" field, keeping only the ordinary question (extension-privacy.md §3 gap)');
+}
+
 // ── Workday actuation ──────────────────────────────────────────────────────
 // Workday's React fields ignore a native-setter value (modes/apply.md), and
 // its dropdowns are <button aria-haspopup="listbox">, not <select>. Both are
@@ -1076,7 +1132,7 @@ export { findCoverLetterInput, findResumeInput, isAutofillFileInput };
     {
       const { worker } = loadApi({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
       const res = await worker.api('/api/companion/plan?url=');
-      ok(res.ok === false && !res.timeout && /cannot reach the career-ops server: Failed to fetch/.test(res.error),
+      ok(res.ok === false && !res.timeout && /cannot reach the CareerAutopilot server: Failed to fetch/.test(res.error),
         'a network failure is still reported as unreachable, not as a timeout');
     }
     {
@@ -1254,24 +1310,51 @@ export { clampToViewport };
   // each tier row, rather than trusting the regex checks above alone —
   // `plan` is a module-scope closure variable in the shipped source (not a
   // parameter), so the harness declares it the same way and reassigns it
-  // per case.
+  // per case. paintFeatureGates() now also calls three sibling helpers
+  // (buildExternalLink/clearHint/paintUpsellHint/showConsentNotice) that live
+  // OUTSIDE its own extracted body, so they ride along in the same harness —
+  // extracting paintFeatureGates alone (as before this existed) would throw
+  // ReferenceError the moment it called any of them.
+  const upsellHelpers = ['buildExternalLink', 'clearHint', 'paintUpsellHint', 'showConsentNotice']
+    .map((name) => extractFunction(COMPANION, name)).join('\n');
   const gateHarness = `
+// A minimal fake element: enough for paintUpsellHint/showConsentNotice to
+// read/write textContent, toggle hidden, and .append() a child (the real
+// href/target/rel land on the link element itself, exposed as .child below).
+function makeEl(id) {
+  return {
+    id, hidden: false, textContent: '',
+    append(...parts) {
+      this.textContent = parts.map((part) => (typeof part === 'string' ? part : part.textContent)).join('');
+      this.child = parts.find((part) => part && typeof part === 'object') || null;
+    },
+  };
+}
+const document = { createElement: () => ({ textContent: '', href: '', target: '', rel: '', className: '' }) };
 let plan = null;
 const buttons = {
   'co-process': { disabled: false, title: '' },
   'co-livefill': { disabled: false, title: '' },
   'co-draftq': { disabled: false, title: '' },
+  'co-process-hint': makeEl('co-process-hint'),
+  'co-livefill-hint': makeEl('co-livefill-hint'),
+  'co-consent-hint': makeEl('co-consent-hint'),
 };
 const root = { getElementById: (id) => buttons[id] || null };
 export const setPlan = (p) => { plan = p; };
 export const getButtons = () => buttons;
+${upsellHelpers}
 ${gates}
 export { paintFeatureGates };
 `;
   const { setPlan, getButtons, paintFeatureGates } =
     await import(`data:text/javascript;base64,${Buffer.from(gateHarness, 'utf8').toString('base64')}`);
 
-  const tierRow = (features, usage) => { setPlan({ features, usage }); paintFeatureGates(); return getButtons(); };
+  const tierRow = (features, usage, extra = {}) => {
+    setPlan({ features, usage, ...extra });
+    paintFeatureGates();
+    return getButtons();
+  };
 
   {
     const b = tierRow({ live_fill: true, process_page: true, generate_message: true, auto_draft: true },
@@ -1287,6 +1370,94 @@ export { paintFeatureGates };
       'free-tier row: Live fill and Process this page are both disabled');
     ok(/paid-plan feature/.test(b['co-livefill'].title) && /paid-plan feature/.test(b['co-process'].title),
       'both disabled buttons state the paid-plan reason, not the daily-cap reason (the tier is what is blocking, not the cap)');
+    // Neither field present (today's shape, before ChunkyLink ships upgrade_url)
+    // — the panel must look and behave exactly as it does today: no visible
+    // hint at all, only the title tooltip above.
+    ok(b['co-process-hint'].hidden === true && b['co-process-hint'].textContent === ''
+      && b['co-livefill-hint'].hidden === true && b['co-livefill-hint'].textContent === '',
+      'with no plan.upgrade_url, no visible upsell hint is rendered — unchanged from before this existed');
+  }
+  {
+    // A real https:// upgrade_url: the sentence AND a link both render, DOM-
+    // built (never innerHTML with the server-supplied string).
+    const b = tierRow({ live_fill: false, process_page: false, generate_message: false, auto_draft: true },
+      { live_fills: { remaining: 0 }, drafts: { remaining: 10 } }, { upgrade_url: 'https://example.com/career/plan' });
+    ok(b['co-process-hint'].hidden === false && /paid-plan feature/.test(b['co-process-hint'].textContent),
+      'plan.upgrade_url present: the Process-this-page hint becomes visible with the feature sentence');
+    ok(b['co-process-hint'].child && b['co-process-hint'].child.href === 'https://example.com/career/plan'
+      && b['co-process-hint'].child.target === '_blank' && b['co-process-hint'].child.textContent === 'Upgrade plan',
+      'the hint carries a real "Upgrade plan" link (built via createElement, not innerHTML) opening in a new tab');
+    ok(b['co-livefill-hint'].hidden === false && b['co-livefill-hint'].child
+      && b['co-livefill-hint'].child.href === 'https://example.com/career/plan',
+      'the Live-fill hint gets the same treatment');
+    // A non-https value (an operator typo, or something worse) must never
+    // become a link — no href is set at all, only the plain sentence.
+    const httpRow = tierRow({ live_fill: false, process_page: false, generate_message: false, auto_draft: true },
+      null, { upgrade_url: 'http://example.com/not-secure' });
+    ok(httpRow['co-process-hint'].hidden === true,
+      'a non-https:// upgrade_url renders no hint at all, exactly like no url being present');
+  }
+  // ── SPEC v2 section 8 Pass 3 attack #3: every value the spec names, one at
+  //    a time, plus a source-level guard that nothing here ever reaches
+  //    innerHTML/insertAdjacentHTML with a server-supplied string. ─────────
+  {
+    const disabledFeatures = { live_fill: false, process_page: false, generate_message: false, auto_draft: true };
+    const noHint = (upgrade_url) => {
+      const b = tierRow(disabledFeatures, null, { upgrade_url });
+      return b['co-process-hint'].hidden === true && b['co-livefill-hint'].hidden === true;
+    };
+    ok(noHint('javascript:alert(1)'), 'upgrade_url:"javascript:alert(1)" — no script runs, no link rendered (non-https scheme)');
+    ok(noHint(42), 'upgrade_url as a bare number renders no hint (typeof check refuses it, not a coercion to string)');
+    ok(noHint({ toString: () => 'https://evil.example' }), 'upgrade_url as an object (even one that would coerce to a plausible https URL via toString) renders no hint — typeof is checked before any use, never String(url)');
+    ok(noHint('a'.repeat(100000)), 'upgrade_url as a 100,000-character string (not https-prefixed) renders no hint and does not hang or throw');
+    // A 100,000-character string that DOES start with https:// is a genuine
+    // (if wildly oversized) URL by this function's own contract — it may
+    // render a link, but only via property assignment (a.href = ...), never
+    // string concatenation into markup, so it stays inert regardless of size.
+    {
+      const hugeHttps = `https://example.com/${'a'.repeat(100000)}`;
+      let threw = false;
+      let b;
+      try { b = tierRow(disabledFeatures, null, { upgrade_url: hugeHttps }); } catch { threw = true; }
+      ok(!threw, 'a 100,000-character https:// upgrade_url does not throw');
+      ok(b['co-process-hint'].child?.href === hugeHttps, 'and if rendered, the href is the literal string via property assignment, never parsed as markup');
+    }
+    // The XSS-shaped payload from the spec: it DOES start with https://, so a
+    // link is expected — the point is that no markup injection occurs,
+    // because buildExternalLink only ever does createElement + property
+    // assignment, never string interpolation into innerHTML.
+    {
+      const xssUrl = 'https://evil.example/"><img src=x onerror=alert(1)>';
+      const b = tierRow(disabledFeatures, null, { upgrade_url: xssUrl });
+      ok(b['co-process-hint'].child?.href === xssUrl && b['co-process-hint'].child?.textContent === 'Upgrade plan',
+        'an XSS-shaped https:// value is assigned verbatim to .href (never interpolated into markup) and the link\'s own text is always the fixed "Upgrade plan" label, never anything derived from the url');
+    }
+    // consent_url goes through the exact same buildExternalLink choke point —
+    // one pass here is enough to confirm it is not a second, divergent path.
+    ok((() => {
+      const b = tierRow(disabledFeatures, null, { consent_required: true, consent_url: 'javascript:alert(1)' });
+      return b['co-consent-hint'].hidden === false && !b['co-consent-hint'].child;
+    })(), 'plan.consent_url:"javascript:alert(1)" — the consent sentence still shows (consent_required is independent of the url), but no link is built, and no script runs');
+
+    // Source-level guard: none of the four helper functions this section
+    // exercises may ever assign to innerHTML or call insertAdjacentHTML — the
+    // DOM-construction discipline (createElement + textContent + property
+    // assignment) is a design invariant, not something the behavioural
+    // assertions above can fully rule out for a future edit that adds a
+    // second, less careful code path alongside the ones tested here.
+    ok(!/innerHTML|insertAdjacentHTML/.test(upsellHelpers),
+      'buildExternalLink/clearHint/paintUpsellHint/showConsentNotice never mention innerHTML or insertAdjacentHTML anywhere in their source');
+  }
+  {
+    // The consent notice: driven by plan.consent_required, independent of tier.
+    const b = tierRow({ live_fill: true, process_page: true, generate_message: false, auto_draft: true },
+      null, { consent_required: true, consent_url: 'https://example.com/career' });
+    ok(b['co-consent-hint'].hidden === false && /review the updated terms/.test(b['co-consent-hint'].textContent),
+      'plan.consent_required shows the consent notice even for an otherwise fully-allowed plan');
+    ok(b['co-consent-hint'].child && b['co-consent-hint'].child.href === 'https://example.com/career',
+      'the consent notice links to plan.consent_url');
+    const clear = tierRow({ live_fill: true, process_page: true, generate_message: false, auto_draft: true }, null);
+    ok(clear['co-consent-hint'].hidden === true, 'once consent is no longer required, the notice clears on the next repaint');
   }
   {
     const b = tierRow({ live_fill: true, process_page: true, generate_message: false, auto_draft: true },
@@ -1541,5 +1712,5 @@ export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
 // The version is how the candidate can tell, on chrome://extensions, that a
 // reload actually picked up a fix.
 {
-  ok(MANIFEST.version === '0.4.3', 'manifest version bumped to 0.4.3 for the Unlink fix (an unlinked tab stays unlinked)');
+  ok(MANIFEST.version === '0.4.5', 'manifest version bumped to 0.4.5 for the rename to CareerAutopilot Companion');
 }

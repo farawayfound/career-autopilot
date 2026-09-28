@@ -97,7 +97,7 @@ $('test').addEventListener('click', async () => {
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.ok) setStatus(`Connected — profile plan loaded (${(data.fields || []).length} contact fields on file).`, true);
-    else if (res.status === 401) setStatus('Server reached, but: token rejected or your CareerOps access is not active.', false);
+    else if (res.status === 401) setStatus('Server reached, but: token rejected or your CareerAutopilot access is not active.', false);
     else setStatus(`Server error: ${data.error || res.status}`, false);
   } catch (err) {
     setStatus(`Cannot reach ${baseUrl} — is the server up, and the URL right? (${err.message})`, false);

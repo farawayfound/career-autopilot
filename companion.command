@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Career-Ops Companion — double-clickable launcher (macOS, Linux).
+# CareerAutopilot Companion — double-clickable launcher (macOS, Linux).
 #
 # macOS: double-click in Finder, or drag onto the Dock.
 # Linux: run setup once; it writes career-ops-companion.desktop next to this

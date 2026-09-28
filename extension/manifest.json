@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Career-Ops Companion",
-  "version": "0.4.3",
-  "description": "Fills job application forms from your career-ops pipeline: auto-fill where possible, click-to-insert and copy everywhere else, an AI tab for live-fill and drafted answers (every call is a deliberate click). Never submits — you always click Submit.",
+  "name": "CareerAutopilot Companion",
+  "version": "0.4.5",
+  "description": "Fills job application forms from your CareerAutopilot pipeline: auto-fill where possible, click-to-insert and copy everywhere else, an AI tab for live-fill and drafted answers (every call is a deliberate click). Never submits — you always click Submit.",
   "permissions": ["storage", "scripting", "activeTab", "webNavigation"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "sw.js" },
@@ -13,7 +13,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Career-Ops Companion — open the fill panel",
+    "default_title": "CareerAutopilot Companion — open the fill panel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -25,7 +25,7 @@
   "commands": {
     "toggle-panel": {
       "suggested_key": { "default": "Alt+Shift+C" },
-      "description": "Toggle the Career-Ops fill panel on this page"
+      "description": "Toggle the CareerAutopilot fill panel on this page"
     }
   }
 }

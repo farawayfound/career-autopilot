@@ -28,7 +28,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  BUNDLED_CONFIG_NAME, COMPANION_EXTENSION_NAME, DASHBOARD_URL, PROFILE_DIR_NAME,
+  BUNDLED_CONFIG_NAME, COMPANION_EXTENSION_NAME, DASHBOARD_URL, LEGACY_COMPANION_EXTENSION_NAMES, PROFILE_DIR_NAME,
   bundledConfigCurrent, bundledConfigIgnored, bundledConfigPath, configFingerprint,
   findCompanionExtensions, findExtension, launchArgs, profileDir, profileInUse,
   readBundledConfig, readDevToolsPort, signedInAccounts, writeBundledConfig,
@@ -123,6 +123,11 @@ const FORBIDDEN = [
     const stranger = join(dir, 'stranger');
     mkdirSync(stranger, { recursive: true });
     writeFileSync(join(stranger, 'manifest.json'), JSON.stringify({ name: 'Some Other Extension' }), 'utf8');
+    // An older checkout that has not pulled the rename still carries the old
+    // manifest name, and is still the companion.
+    const older = join(dir, 'older-clone', 'extension');
+    mkdirSync(older, { recursive: true });
+    writeFileSync(join(older, 'manifest.json'), JSON.stringify({ name: LEGACY_COMPANION_EXTENSION_NAMES[0] }), 'utf8');
     writeFileSync(secure, JSON.stringify({
       extensions: {
         settings: {
@@ -130,13 +135,19 @@ const FORBIDDEN = [
           bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: { path: stranger },
           cccccccccccccccccccccccccccccccc: { path: join(dir, 'gone', 'extension') }, // loaded once, since deleted
           dddddddddddddddddddddddddddddddd: { path: 'dddddddddddddddddddddddddddddddd/1.0' },
+          eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee: { path: older },
         },
       },
     }), 'utf8');
     ok(findExtension(profile, EXT) === null, 'a copy loaded from another checkout is not THIS checkout\'s');
     const copies = findCompanionExtensions(profile);
-    ok(copies.length === 1 && copies[0].id === 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' && copies[0].path === other,
+    ok(copies.length === 2 && copies[0].id === 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' && copies[0].path === other,
       'but it is found by manifest name, with the directory it reads its config from — not a stranger, not a deleted one');
+    ok(copies[1]?.id === 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' && copies[1].path === older,
+      'and a copy still carrying the name from before the rename is found too, so setup keeps configuring it');
+    const manifestName = JSON.parse(readFileSync(join(ROOT, 'extension', 'manifest.json'), 'utf8')).name;
+    ok(manifestName === COMPANION_EXTENSION_NAME,
+      `the name setup looks for is the name the manifest ships (${manifestName})`);
 
     writeFileSync(secure, '{ this is not json', 'utf8');
     ok(findExtension(profile, EXT) === null, 'a corrupt Secure Preferences reads as "not loaded", never throws');

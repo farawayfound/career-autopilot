@@ -1,4 +1,4 @@
-// What the "Career-Ops Companion" shortcut should point at.
+// What the "CareerAutopilot Companion" shortcut should point at.
 //
 // Two targets are possible and the difference is felt every single launch:
 //
@@ -19,7 +19,18 @@
 // Everything here is pure: it decides and renders, it does not write. Guarded
 // by tests/companion-shortcut.test.mjs.
 import path from 'node:path';
-import { launchArgs } from './launch.mjs';
+import { COMPANION_EXTENSION_NAME, launchArgs } from './launch.mjs';
+
+/** The shortcut's file name, in the repo root and on the Desktop. */
+export const SHORTCUT_FILE_NAME = `${COMPANION_EXTENSION_NAME}.lnk`;
+
+/**
+ * File names setup wrote before the rename. Setup replaces a copy under one of
+ * these with one under SHORTCUT_FILE_NAME in the same place, because a copy it
+ * no longer refreshes goes stale while still looking like it works. A taskbar
+ * pin under one is reported and never touched (see setup-companion.mjs).
+ */
+export const LEGACY_SHORTCUT_FILE_NAMES = Object.freeze(['Career-Ops Companion.lnk']);
 
 /**
  * Chrome's per-profile taskbar identity.
@@ -91,7 +102,7 @@ export function shortcutSpec({
     workingDirectory: repo,
     icon,
     appId: null,
-    description: 'Set up and launch the Career-Ops Companion browser',
+    description: `Set up and launch the ${COMPANION_EXTENSION_NAME} browser`,
     why: ready
       ? 'the fast target needs a browser this launcher can spawn directly'
       : 'the extension is not loaded in the profile yet, so a launch still has work to do',
@@ -106,7 +117,7 @@ export function shortcutSpec({
     workingDirectory: repo,
     icon,
     appId: chromeAppId({ userDataDir: profileDir, baseAppId }),
-    description: 'Career-Ops Companion — the browser your applications are filled in',
+    description: `${COMPANION_EXTENSION_NAME} — the browser your applications are filled in`,
     why: 'the extension is loaded and its config file is current, so there is nothing to do but open the browser',
   };
 }

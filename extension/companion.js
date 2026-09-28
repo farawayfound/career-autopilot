@@ -1,4 +1,4 @@
-// Career-Ops Companion — content script. Injected into EVERY frame of the tab
+// CareerAutopilot Companion — content script. Injected into EVERY frame of the tab
 // (ATS forms often live inside embeds); the panel renders only in the top
 // frame, the fill engine runs everywhere, and the background SW relays
 // messages between them.
@@ -677,7 +677,7 @@
     const out = [];
     const seen = new Set();
     for (const { el, label } of collectControls()) {
-      if (!visible(el) || !label || label.length < 6) continue;
+      if (!visible(el) || !label || label.length < 6 || isSensitive(el)) continue;
       const key = label.toLowerCase().slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2017,7 +2017,7 @@
       `Submit detected but NOT recorded — ${String(error || 'the server refused it').slice(0, 160)}. `
       + (willRetry
         ? 'Retrying when this tab reloads or you come back to it; if it stays red, mark it applied from the dashboard.'
-        : 'Mark it applied from the CareerOps dashboard.'),
+        : 'Mark it applied from the CareerAutopilot dashboard.'),
       true,
     );
   };
@@ -2218,6 +2218,7 @@
       form,
     });
     if (!res || !res.ok) {
+      if (res && res.error === 'consent_required') showConsentNotice(true);
       setStatusLine((res && res.message) || (res && res.error) || 'Live fill failed.', true);
       return;
     }
@@ -2345,6 +2346,7 @@
 
   async function requestDraft(payload) {
     const res = await send({ type: 'companion:getDraft', ...payload, async: true });
+    if (res && res.error === 'consent_required') showConsentNotice(true);
     if (!res || !res.ok || !res.job) return res; // old sync shape, or an error — unchanged either way
     const t0 = Date.now();
     let dots = 0;
@@ -2453,6 +2455,7 @@
         capture,
       });
       if (!res || !res.ok) {
+        if (res && res.error === 'consent_required') showConsentNotice(true);
         setStatusLine((res && res.error) || 'Could not queue this page.', true);
         return;
       }
@@ -2510,7 +2513,7 @@
     }
     if (processWatch === id) {
       processWatch = null;
-      if (host) setStatusLine('Still processing — check the CareerOps dashboard, then press ⟳ here to load the plan.');
+      if (host) setStatusLine('Still processing — check the CareerAutopilot dashboard, then press ⟳ here to load the plan.');
     }
   }
 
@@ -2839,6 +2842,7 @@
     wrap.innerHTML = `
       <div class="co-hint" id="co-ai-status">${escHtml([tierLine, lfLine, drLine].filter(Boolean).join(' · '))}</div>
       <button class="co-btn co-primary" id="co-livefill">✨ Live fill</button>
+      <div class="co-hint" id="co-livefill-hint" hidden></div>
       <label class="co-check"><input type="checkbox" id="co-live-next"> Also live-fill the next steps of this application (this tab only)</label>
       <div id="co-livefill-results"></div>
       <div class="co-sec">Open questions</div>
@@ -3129,6 +3133,65 @@
     return row;
   }
 
+  // A link built from a SERVER-SUPPLIED url, never trusted as markup: DOM
+  // APIs only (createElement/textContent), and the href is set only after the
+  // scheme is checked — an http://, javascript:, or malformed value renders no
+  // link at all rather than a broken or dangerous one. Opens the way any
+  // ordinary outbound link on the page would (target=_blank + noopener), since
+  // neither this content-script panel nor the service worker has any other
+  // "open a tab" path today.
+  function buildExternalLink(url, label) {
+    if (typeof url !== 'string' || !url.startsWith('https://')) return null;
+    const a = document.createElement('a');
+    a.textContent = label;
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = 'co-link';
+    return a;
+  }
+
+  function clearHint(el) {
+    if (!el) return;
+    el.hidden = true;
+    el.textContent = '';
+  }
+
+  // Paints a paid-plan upsell hint next to a gated button. When the feature is
+  // allowed, or the server sent no upgrade_url, this renders NOTHING — the
+  // panel looks and behaves exactly as it did before this existed; the
+  // button's own `title` tooltip (set by the caller) is the only explanation.
+  // Only a genuine https:// upgrade_url adds the new, visible sentence + link.
+  function paintUpsellHint(el, { allowed, sentence, url }) {
+    if (!el) return;
+    const link = !allowed ? buildExternalLink(url, 'Upgrade plan') : null;
+    if (!link) { clearHint(el); return; }
+    el.hidden = false;
+    el.textContent = '';
+    el.append(`${sentence} `, link);
+  }
+
+  // The account-wide consent notice: shown when the cached plan says a
+  // companion context is enforced and pending (plan.consent_required, set on
+  // every GET /api/companion/plan response), or immediately on the caller's
+  // say-so (`force`) when an AI action itself just answered 409
+  // consent_required — which can be true even before the next plan reload.
+  // The link is best-effort: the background worker's generic error handling
+  // (sw.js's `api()`) does not forward extra fields on a non-2xx response, so
+  // a 409 caught elsewhere may have no fresher consent_url than the one this
+  // panel already cached from the last successful plan load.
+  function showConsentNotice(force = false) {
+    const el = root.getElementById('co-consent-hint');
+    if (!el) return;
+    const required = force || Boolean(plan && plan.consent_required);
+    if (!required) { clearHint(el); return; }
+    el.hidden = false;
+    el.textContent = '';
+    const link = buildExternalLink(plan && plan.consent_url, 'Review terms');
+    if (link) el.append('Open your dashboard to review the updated terms before using AI features. ', link);
+    else el.textContent = 'Open your dashboard to review the updated terms before using AI features.';
+  }
+
   // Buttons whose availability depends on tier/cap — disabled, never hidden,
   // always with a stated reason (second late clarification: "disabled with a
   // reason when the tier or the daily cap says no").
@@ -3140,6 +3203,9 @@
       proc.title = allowed
         ? 'Evaluate this posting from what is on screen: report, score, tailored CV and cover letter on your server. Stay on the page and the panel attaches the resume and fills the form when it is ready — or close it and check the dashboard.'
         : 'Process this page is a paid-plan feature — ask the admin to upgrade your access.';
+      paintUpsellHint(root.getElementById('co-process-hint'), {
+        allowed, sentence: 'Process this page is a paid-plan feature.', url: plan && plan.upgrade_url,
+      });
     }
     const live = root.getElementById('co-livefill');
     if (live) {
@@ -3150,7 +3216,11 @@
       live.title = !allowed ? 'Live fill is a paid-plan feature — ask the admin to upgrade your tier.'
         : capped ? "Today's live-fill limit reached — resets at midnight."
           : `Reads every open question on this page and fills a best answer using your fleet model — one call for up to 60 questions.${remaining != null ? ` ${remaining} left today.` : ''}`;
+      paintUpsellHint(root.getElementById('co-livefill-hint'), {
+        allowed, sentence: 'Live fill is a paid-plan feature.', url: plan && plan.upgrade_url,
+      });
     }
+    showConsentNotice();
     const draft = root.getElementById('co-draftq');
     if (draft) {
       const remaining = plan && plan.usage && plan.usage.drafts && plan.usage.drafts.remaining;
@@ -3205,6 +3275,7 @@
         const capture = captureMessageContext();
         const res = await send({ type: 'companion:generateMessage', context: clean(ctx.value), capture });
         if (!res || !res.ok || !res.message) {
+          if (res && res.error === 'consent_required') showConsentNotice(true);
           setStatusLine((res && res.error) || 'No message came back — add some context and retry.', true);
           return;
         }
@@ -3294,6 +3365,8 @@
           border: 1px solid var(--co-border); border-radius: 6px; resize: vertical; font-size: 12px; }
         .co-assist-btns { display: flex; gap: 6px; margin-top: 6px; }
         .co-hint { color: var(--co-dim); line-height: 1.35; margin-top: 4px; }
+        .co-link { color: var(--co-accent); text-decoration: underline; cursor: pointer; }
+        .co-hint.co-warn { color: var(--co-fg); }
         .co-foot { padding: 6px 12px 9px; border-top: 1px solid var(--co-border); color: var(--co-dim); font-size: 11px; }
         .co-tabs { display: flex; gap: 0; padding: 0 12px; border-bottom: 1px solid var(--co-border); }
         .co-tab { flex: 1; border: 0; background: transparent; color: var(--co-dim); padding: 7px 4px; font-size: 12px; cursor: pointer;
@@ -3326,7 +3399,7 @@
       </style>
       <div class="co-panel">
         <div class="co-head">
-          <strong>⚡ Career-Ops</strong>
+          <strong>⚡ CareerAutopilot</strong>
           <button class="co-btn" id="co-collapse" title="Collapse to a small pill — the panel keeps working, out of the way">⤢</button>
           <button class="co-btn" id="co-refresh" title="Reload the fill plan">⟳</button>
           <button class="co-btn" id="co-close" title="Close">✕</button>
@@ -3337,10 +3410,12 @@
           <button class="co-tab" data-tab="message" title="Draft a reply or first message from your CV">Generate message</button>
         </div>
         <div class="co-linked" id="co-linked" hidden></div>
+        <div class="co-hint co-warn" id="co-consent-hint" hidden></div>
         <div class="co-actions" id="co-actions">
           <button class="co-btn co-primary" id="co-autofill" title="Fill contact fields and answers, attach the resume and cover letter — whatever fails stays in the list below. Never submits.">⚡ Fill everything</button>
           <button class="co-btn" id="co-process" title="Evaluate this posting from what is on screen: report, score, tailored CV and cover letter on your server. Stay on the page and the panel attaches the resume and fills the form when it is ready — or close it and check the dashboard.">＋ Process this page</button>
         </div>
+        <div class="co-hint" id="co-process-hint" hidden></div>
         <div class="co-status" id="co-status"></div>
         <div class="co-body" id="co-body"></div>
         <div class="co-foot">Never submits — review every field, then click the form's own Submit.</div>

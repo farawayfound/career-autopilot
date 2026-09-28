@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Career-Ops Companion — launcher.
+// CareerAutopilot Companion — launcher.
 //
 //   npm run companion                       # dashboard
 //   npm run companion -- <job-page-url>      # straight onto an application
@@ -100,7 +100,7 @@ console.log(`
 Ready (pid ${child.pid}). ${START_URL}
   - Open a job application page from your queue: on known ATS hosts the panel
     auto-opens and fills when the URL matches an active item.
-  - Manual trigger: puzzle-piece menu -> Career-Ops Companion, or Alt+Shift+C.
+  - Manual trigger: puzzle-piece menu -> CareerAutopilot Companion, or Alt+Shift+C.
   - After editing extension code: hit reload on the card at chrome://extensions.
   - If the panel says "not configured": reload the extension once — it reads
     extension/companion.local.json when it starts.

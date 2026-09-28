@@ -68,7 +68,15 @@ export const DASHBOARD_URL = 'https://davidchui.work/career';
 export const PROFILE_DIR_NAME = '.companion-profile-chrome';
 
 /** The extension's manifest name — how a loaded copy is recognised whatever path it came from. */
-export const COMPANION_EXTENSION_NAME = 'Career-Ops Companion';
+export const COMPANION_EXTENSION_NAME = 'CareerAutopilot Companion';
+
+/**
+ * Names the extension shipped under before, still recognised: a copy loaded
+ * from an older checkout (one a Desktop shortcut still points at) keeps its
+ * old manifest until that checkout is updated, and setup must still find it
+ * and configure it rather than report it as "not loaded".
+ */
+export const LEGACY_COMPANION_EXTENSION_NAMES = Object.freeze(['Career-Ops Companion']);
 
 /** The config file the extension reads, next to its own code. Gitignored. */
 export const BUNDLED_CONFIG_NAME = 'companion.local.json';
@@ -202,7 +210,9 @@ export function findCompanionExtensions(dir) {
     try {
       name = JSON.parse(readFileSync(path.join(where, 'manifest.json'), 'utf8'))?.name;
     } catch { continue; }
-    if (name === COMPANION_EXTENSION_NAME) found.push({ id, path: where });
+    if (name === COMPANION_EXTENSION_NAME || LEGACY_COMPANION_EXTENSION_NAMES.includes(name)) {
+      found.push({ id, path: where });
+    }
   }
   return found;
 }
@@ -304,7 +314,7 @@ export function readBundledConfig(extDir) {
 export function writeBundledConfig(extDir, { baseUrl, token }) {
   const file = bundledConfigPath(extDir);
   const body = `${JSON.stringify({
-    _about: 'Written by extension/setup-companion.mjs for this machine. The Career-Ops Companion extension reads it when it starts. Gitignored — never commit it.',
+    _about: 'Written by extension/setup-companion.mjs for this machine. The CareerAutopilot Companion extension reads it when it starts. Gitignored — never commit it.',
     baseUrl: normalizeUrl(baseUrl),
     token: String(token).trim(),
   }, null, 2)}\n`;

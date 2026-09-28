@@ -35,8 +35,10 @@ const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8'
   };
   ok(ignored('config/companion.local.json'),
     'the saved server URL + API token is gitignored (it holds a live credential)');
-  ok(ignored('Career-Ops Companion.lnk'),
-    'generated .lnk shortcuts are gitignored (they hard-code one machine\'s repo path)');
+  ok(ignored('CareerAutopilot Companion.lnk') && ignored('Career-Ops Companion.lnk'),
+    'generated .lnk shortcuts are gitignored, under the current name and the one before the rename (they hard-code one machine\'s repo path)');
+  ok(ignored('CareerAutopilot Companion.app/Contents/Info.plist') && ignored('Career-Ops Companion.app'),
+    'so is the macOS bundle, and the link setup leaves under its old name');
   ok(git('ls-files', 'config/companion.local.json') === '',
     'no companion.local.json has ever been committed');
   // Setup also writes a copy next to the extension code, because that is the

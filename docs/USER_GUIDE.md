@@ -1,4 +1,4 @@
-# Career-Ops Companion — Using the Extension
+# CareerAutopilot Companion — Using the Extension
 
 **Audience:** you, the person applying for jobs.
 (If you're curious how it works under the hood, career-ops's own
@@ -9,7 +9,7 @@
 > career-ops and the extension has no code path that breaks it.
 
 The companion fills job application forms **in your own browser**, using data
-from your career-ops pipeline. It is the alternative to the dashboard's
+from your CareerAutopilot pipeline. It is the alternative to the dashboard's
 live-browser mirror: the mirror remote-controls a worker machine's browser,
 the companion brings the data to the browser you are already signed in to, so
 your answers stay on your machine and in the tab in front of you.
@@ -22,7 +22,7 @@ Two ways to run this, and everything below works the same either way — only
 where the server URL and token come from differs.
 
 **Hosted (most people).** Request access at **davidchui.work** — sign up (or
-sign in), then ask for CareerOps access from the Career tab. You'll get an
+sign in), then ask for CareerAutopilot access from the Career tab. You'll get an
 email when it's approved. Once in, open **Career → Companion** and press
 **Create token** — it's shown once, so copy it right away. Your server URL is
 just `https://davidchui.work`.
@@ -49,10 +49,16 @@ ready-to-go browser: extension loaded, settings filled in, sitting on your
 pipeline dashboard. From there, open any application in your queue and the
 panel takes over.
 
-It also leaves **`Career-Ops Companion.lnk`** next to it, with a proper icon.
+It also leaves **`CareerAutopilot Companion.lnk`** next to it, with a proper icon.
 **Drag that to the taskbar or the Desktop** — that is your one-click launcher
 from then on. It keeps working from anywhere on the machine; it remembers where
 the repo is.
+
+Set it up before the extension was renamed? The launcher used to be called
+`Career-Ops Companion.lnk`. The next run replaces that copy, in the repo root
+and on the Desktop, with the new one. A taskbar pin under the old name is left
+alone. It still opens, but setup no longer refreshes it, so unpin it and pin
+the new Desktop shortcut instead. Setup tells you when it finds one.
 
 Every run after the first is a few seconds of checks and then the browser. The
 launcher exits once the browser is up — the browser is your own session from
@@ -62,13 +68,17 @@ then on, so closing the console window no longer closes it.
 <summary>On a Mac or Linux box instead</summary>
 
 Double-click **`companion.command`** for the first run. On macOS, setup then
-writes **`Career-Ops Companion.app`** in the repo root — that is the launcher
+writes **`CareerAutopilot Companion.app`** in the repo root — that is the launcher
 with the proper icon: **drag it onto the Dock to pin it** (`--desktop` also
 symlinks it onto the Desktop). Same two targets as the Windows .lnk: while
 something still needs setting up it opens Terminal on `companion.command`;
 once the extension is loaded and its config file is written it opens Chrome
 directly, no Terminal window at all. Unlike Windows, rerunning setup refreshes the app in place and
 a Dock pin survives it — the Dock pins by path, not by Explorer's bookkeeping.
+An app made before the rename, `Career-Ops Companion.app`, becomes a link to the
+new one rather than being deleted, so a Dock pin to it keeps opening the
+current launcher. Pin the new one when convenient, then remove the old pin and
+delete the link.
 
 On Linux, setup writes `career-ops-companion.desktop` next to it — copy that
 into `~/.local/share/applications/` for the applications menu.
@@ -85,7 +95,7 @@ one, **Show more options** first.
 Two things worth knowing about it:
 
 - **It skips the checks.** If the server token is ever rotated (or your
-  CareerOps access changes), the shortcut still opens the browser and the
+  CareerAutopilot access changes), the shortcut still opens the browser and the
   panel just says the token was rejected. That is the moment to double-click
   **`companion.cmd`** instead — setup rewrites the config file the extension
   reads, and the extension picks it up by itself (on its next start, or the
@@ -209,17 +219,17 @@ still points at a Chrome kept somewhere unusual.
                        (path to your Chrome install)
                      Sign this profile into Chrome on first run — your saved
                      passwords come with it.
-[4] Career-ops server
+[4] CareerAutopilot server
       ✓ using saved settings (config/companion.local.json)
       ✓ reachable — HTTP 200, profile plan with 9 contact fields
-[5] Launcher icon    ✓ Career-Ops Companion.lnk (in the repo root)
+[5] Launcher icon    ✓ CareerAutopilot Companion.lnk (in the repo root)
 
 Ready.
 ```
 
 `cannot reach …` means the server is down, or you are offline. Setup continues
 and the browser still opens, so fix connectivity and press **Test connection**
-on the extension's options page. `token rejected or your CareerOps access is
+on the extension's options page. `token rejected or your CareerAutopilot access is
 not active` means either the token was rotated (rerun with `--recheck`) or —
 on the hosted service — your access has been paused; check the Career page.
 
@@ -257,7 +267,7 @@ Paste it, click **Save**, then **Test connection**. A good result reads:
 > Connected — profile plan loaded (9 contact fields on file).
 
 If it says the token was rejected, the server is up but the value is wrong (or,
-on the hosted service, your CareerOps access isn't active). If it says it
+on the hosted service, your CareerAutopilot access isn't active). If it says it
 cannot reach the URL, check the server is running and that you have network
 access to it.
 

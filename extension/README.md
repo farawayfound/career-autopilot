@@ -1,9 +1,9 @@
-# Career-Ops Companion (browser extension)
+# CareerAutopilot Companion (browser extension)
 
 **Hard rule carried over from the rest of career-ops: it never submits.**
 It fills, inserts, and copies. You always click the form's own Submit.
 
-Fills job application forms **in your own browser** from your career-ops
+Fills job application forms **in your own browser** from your CareerAutopilot
 pipeline. Complements the dashboard live-browser mirror: the mirror remote-controls
 the worker machine's browser; the companion brings the data to the browser you
 are already signed in to, so your answers stay on your machine and in the tab
@@ -32,9 +32,11 @@ done. Every Insert also copies to the clipboard as a backstop.
 **`companion.cmd`** in the repo root (macOS/Linux: `companion.command`). First
 run on a machine installs dependencies, finds Chrome, asks once for the server
 URL + API token, walks you through the two steps only you can do, and creates
-the launcher: **`Career-Ops Companion.lnk`** on Windows (drag to the Desktop,
-right-click to pin), **`Career-Ops Companion.app`** on macOS (drag onto the
-Dock; `--desktop` also symlinks it to the Desktop). Once setup has finished it
+the launcher: **`CareerAutopilot Companion.lnk`** on Windows (drag to the Desktop,
+right-click to pin), **`CareerAutopilot Companion.app`** on macOS (drag onto the
+Dock; `--desktop` also symlinks it to the Desktop). A launcher made under the
+extension's old name, "Career-Ops Companion", is renamed on the next run; a
+taskbar pin is left alone, and setup says so. Once setup has finished it
 opens Chrome directly: no console or Terminal window, extension loaded,
 settings applied, on `https://davidchui.work/career`.
 
@@ -156,7 +158,7 @@ landed in the DOM) and `node tests/test-all.mjs --only companion-extension`.
   shared machine's browser profile.
 - Message drafting is `POST /api/companion/generate-message`; its model and
   prompt are set on whatever server you point this at (on the reference
-  Career Ops server, that route is admin-only — a signed-in guest gets a
+  CareerAutopilot server, that route is admin-only — a signed-in guest gets a
   clear error there instead of a draft).
 - Backend routes live in `autopilot/server.mjs` (`/api/companion/*`); the fill
   plan is built by `autopilot/lib/apply/fill-plan.mjs` — the same module the

@@ -1,12 +1,12 @@
-# Career-Ops Companion
+# CareerAutopilot Companion
 
 > **It never submits.** It fills, inserts, attaches, and copies. You always
 > click the form's own Submit button yourself. There is no code path that
 > breaks this rule.
 
 A browser extension that fills job application forms from your
-[career-ops](https://github.com/farawayfound/career-ops) pipeline, in your
-own browser and under your own signed-in session. Your answers stay on your
+CareerAutopilot pipeline (the [career-ops](https://github.com/farawayfound/career-ops)
+project), in your own browser and under your own signed-in session. Your answers stay on your
 machine and in the tab in front of you: the extension has no account of its
 own, applies for nothing on your behalf, and leaves every submission to you.
 
@@ -51,7 +51,7 @@ URL and token (see below).
 ## Getting a token
 
 1. **Request access** at [davidchui.work](https://davidchui.work) — sign up,
-   then ask for CareerOps access from the Career tab. You'll get an email
+   then ask for CareerAutopilot access from the Career tab. You'll get an email
    when it's approved.
 2. **Sign in**, open **Career → Companion**, and press **Create token**. It's
    shown once — copy it.

@@ -1,4 +1,4 @@
-// What the "Career-Ops Companion" app bundle launches — the macOS analog of
+// What the "CareerAutopilot Companion" app bundle launches — the macOS analog of
 // shortcut.mjs, which renders the Windows .lnk.
 //
 // macOS has no .lnk. The Dock pins applications, and an application is a
@@ -39,14 +39,22 @@
 // extension/setup-companion.mjs owns the writes. Guarded by
 // tests/companion-shortcut-mac.test.mjs.
 import path from 'node:path';
-import { launchArgs } from './launch.mjs';
+import { COMPANION_EXTENSION_NAME, launchArgs } from './launch.mjs';
 
 /** The bundle's directory name, in the repo root (and symlinked wherever else). */
-export const APP_BUNDLE_NAME = 'Career-Ops Companion.app';
+export const APP_BUNDLE_NAME = `${COMPANION_EXTENSION_NAME}.app`;
 
 /**
- * Never change this. The Dock survives a rewrite because the path is stable;
- * LaunchServices survives it because this is.
+ * Bundle names setup wrote before the rename. A Dock pin holds the old path,
+ * so setup does not delete a bundle left under one of these: it replaces it
+ * with a symlink to APP_BUNDLE_NAME, and the old pin keeps opening the current
+ * launcher instead of breaking or going stale.
+ */
+export const LEGACY_APP_BUNDLE_NAMES = Object.freeze(['Career-Ops Companion.app']);
+
+/**
+ * Never change this, not even for a rename. The Dock survives a rewrite
+ * because the path is stable; LaunchServices survives it because this is.
  */
 export const BUNDLE_ID = 'work.davidchui.career-ops.companion';
 
@@ -90,7 +98,7 @@ export function appBundleSpec({ browser, repo, profileDir, startUrl, ready }) {
     // questions and waits on Enter, and LaunchServices gives a bundle's
     // executable no terminal to do that in.
     exec: ['open', '-a', 'Terminal', path.join(repo, 'companion.command')],
-    description: 'Set up and launch the Career-Ops Companion browser',
+    description: `Set up and launch the ${COMPANION_EXTENSION_NAME} browser`,
     why: ready
       ? 'the fast target needs a browser this launcher can spawn directly'
       : 'the extension is not loaded in the profile yet, so a launch still has work to do',
@@ -109,7 +117,7 @@ export function appBundleSpec({ browser, repo, profileDir, startUrl, ready }) {
     exec: bundle
       ? ['open', '-n', bundle, '--args', ...args]
       : [browser, ...args],
-    description: 'Career-Ops Companion — the browser your applications are filled in',
+    description: `${COMPANION_EXTENSION_NAME} — the browser your applications are filled in`,
     why: 'the extension is loaded and its config file is current, so there is nothing to do but open the browser',
   };
 }
@@ -140,7 +148,7 @@ export function appBundleOf(binary) {
 export function launcherScript(spec) {
   return [
     '#!/bin/bash',
-    `# Career-Ops Companion — ${spec.kind} target: ${spec.why}`,
+    `# ${COMPANION_EXTENSION_NAME} — ${spec.kind} target: ${spec.why}`,
     '# Written by extension/setup-companion.mjs; rerunning setup refreshes it in place.',
     `exec ${spec.exec.map(shellQuote).join(' ')}`,
     '',
@@ -156,8 +164,8 @@ export function launcherScript(spec) {
  */
 export function infoPlist({ iconBaseName = 'career-ops', version = '1.0' } = {}) {
   const entries = [
-    ['CFBundleName', 'Career-Ops Companion'],
-    ['CFBundleDisplayName', 'Career-Ops Companion'],
+    ['CFBundleName', COMPANION_EXTENSION_NAME],
+    ['CFBundleDisplayName', COMPANION_EXTENSION_NAME],
     ['CFBundleIdentifier', BUNDLE_ID],
     ['CFBundleExecutable', 'launcher'],
     ['CFBundleIconFile', iconBaseName],

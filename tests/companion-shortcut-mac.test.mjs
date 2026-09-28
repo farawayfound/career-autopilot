@@ -25,7 +25,8 @@ import { execFileSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import {
-  APP_BUNDLE_NAME, BUNDLE_ID, appBundleOf, appBundleSpec, bundleFiles, infoPlist, launcherScript, shellQuote, xmlEscape,
+  APP_BUNDLE_NAME, BUNDLE_ID, LEGACY_APP_BUNDLE_NAMES, appBundleOf, appBundleSpec, bundleFiles, infoPlist, launcherScript,
+  shellQuote, xmlEscape,
 } from '../extension/shortcut-mac.mjs';
 
 console.log('\ncompanion — macOS launcher app bundle');
@@ -105,8 +106,10 @@ const base = (over = {}) => ({
 {
   ok(BUNDLE_ID === 'work.davidchui.career-ops.companion',
     `the bundle id is pinned (${BUNDLE_ID}) — changing it makes LaunchServices see a brand-new app`);
-  ok(APP_BUNDLE_NAME === 'Career-Ops Companion.app',
+  ok(APP_BUNDLE_NAME === 'CareerAutopilot Companion.app',
     'the bundle name matches what the docs and the Dock show');
+  ok(LEGACY_APP_BUNDLE_NAMES.includes('Career-Ops Companion.app') && !LEGACY_APP_BUNDLE_NAMES.includes(APP_BUNDLE_NAME),
+    'the name before the rename is still known, so setup can turn an old bundle into a link instead of stranding a Dock pin');
 
   const plist = infoPlist();
   ok(plist.includes(`<string>${BUNDLE_ID}</string>`), 'the plist carries the pinned id');

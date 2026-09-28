@@ -9,6 +9,9 @@ companion.local.json
 # Generated launcher shortcuts — they hard-code one machine's absolute path.
 *.lnk
 *.app/
+# The app's name before the rename. Setup leaves it as a link to the current
+# app so a Dock pin keeps working, and a link is not a directory.
+Career-Ops Companion.app
 career-ops-companion.desktop
 
 node_modules/
