@@ -11,6 +11,7 @@ import { authHeadersFor } from './fetch-auth.mjs';
 import { readLeadCapture, jdFromLeadCapture } from './lead-capture.mjs';
 import { rateLimitedError, isRateLimited } from './fetch-pacing.mjs';
 import { extractJobPosting, compactSalary } from '../../providers/_jsonld.mjs';
+import { genericPostingIdentity } from './posting-identity.mjs';
 
 const TIMEOUT_MS = 15_000;
 
@@ -458,9 +459,11 @@ async function fetchGeneric(url, { expectTitle = '', auth = [], lookup } = {}) {
     }
     // Even when the body checks out, prefer the scanner's title over a
     // board-level <title> like "Explore Our Open Positions | CoreWeave".
-    const title = (expectTitle && !pageMentionsRole(pageTitle, expectTitle)) ? expectTitle : pageTitle;
+    // lib/posting-identity.mjs: the employer and a clean role from the page's own markup.
+    const identity = genericPostingIdentity(html, { url, pageTitle, text });
+    const title = (expectTitle && !pageMentionsRole(pageTitle, expectTitle)) ? expectTitle : ((expectTitle && identity.head) || identity.title || pageTitle);
     return {
-      live: true, ats: 'generic', org: null, title, location: '',
+      live: true, ats: 'generic', org: identity.company || null, title, location: '',
       text: text.slice(0, 60_000), questions: [], comp: null, updatedAt: null,
       applyUrl: url, verificationNote: 'generic fetch — liveness unconfirmed',
     };
