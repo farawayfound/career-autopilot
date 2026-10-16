@@ -1,0 +1,209 @@
+# config/discovery-node.user.example.yml — the discovery node's settings for YOUR computer.
+#
+# `discovery-node` (discovery-node.cmd / .command / .sh) copies this file to
+# config/discovery-node.yml the first time you run it, filling in two values:
+# the address of your CareerAutopilot account and a name for this computer. Your
+# token is saved separately in config/discovery-node.local.yml, so nothing in
+# THIS file is secret. Both of those files stay on this computer: they are
+# ignored by git, so a commit or a fork never carries them.
+#
+# What the node does: it searches public job boards and company career pages for
+# the roles you set up on the Targeting tab of your CareerAutopilot account,
+# checks each result locally, and sends the good ones to YOUR review queue there.
+# It never calls an AI model, and it only runs while the window you started it in
+# is open.
+#
+# You can edit anything below by hand and run discovery-node again, or change a
+# job's on/off switch, interval and start time from the node's dashboard.
+
+node:
+  # A name for this computer: lowercase letters, digits and hyphens, up to 32
+  # characters. Setup fills it in from the computer's name.
+  name: my-computer
+
+hub:
+  # "companion" = talk to your own hosted CareerAutopilot account with your token.
+  mode: companion
+  # Your CareerAutopilot address. Setup fills it in.
+  url: https://davidchui.work
+  # How often the node checks in (so the site can show it is online).
+  heartbeat_minutes: 5
+  # How often the node re-reads your Targeting settings.
+  criteria_refresh_minutes: 30
+  # Most finds sent per request.
+  ship_batch: 50
+  # A find scoring below this is kept locally and not sent. Lower it to see more.
+  ship_min_score: 40
+  # Ask your account which results it already knows before checking them here.
+  seen_check: true
+  seen_check_max: 200
+
+health:
+  # A tiny status page for scripts. Off by default; if you turn it on it is only
+  # reachable from this computer (127.0.0.1) and the node refuses any other address.
+  enabled: false
+  host: 127.0.0.1
+  port: 8380
+
+dashboard:
+  # The local control page: pause, resume, stop, and change job timing. It listens
+  # on this computer only. The link (with a one-time access key) is printed in the
+  # window when the node starts.
+  enabled: true
+  host: 127.0.0.1
+  port: 8390
+
+scheduler:
+  # How often the node wakes up to see what is due.
+  tick_seconds: 30
+
+# Each job runs one at a time. `every_minutes` is how long after a job finishes it
+# runs again. To run a job at a fixed time of day instead, add `start_at: "06:00"`
+# (it then runs at 06:00 and every `every_minutes` after that, restarting each day;
+# an interval over 24 hours must be whole days). Set `enabled: false` to switch a
+# job off. The intervals below are deliberately gentle: this runs on your
+# computer and talks to other people's servers.
+jobs:
+  # The companies and career pages listed in your Targeting settings.
+  tracked:
+    enabled: true
+    every_minutes: 480
+    max_minutes: 45            # stop the job if it runs longer than this
+
+  # The job boards in the `boards:` list below.
+  boards:
+    enabled: true
+    every_minutes: 720
+    max_minutes: 30
+
+  # RemoteOK, Remotive, We Work Remotely and Hacker News "Who is hiring".
+  aggregators:
+    enabled: true
+    every_minutes: 360
+    extra_remotive_searches: []
+    extra_wwr_feeds: []
+
+  # Hears about companies you did not list (funding news, and companies seen in
+  # your own results) and queues them for `resolve` below.
+  sources:
+    enabled: true
+    every_minutes: 720
+    funding_months: 3
+    max_per_run: 20
+
+  # Finds the careers page of a company `sources` heard about. Fetches a company's
+  # own website, so it is kept small and slow.
+  resolve:
+    enabled: true
+    every_minutes: 480
+    max_minutes: 30
+    max_per_run: 10
+    concurrency: 2
+    host_gap_ms: 5000
+
+  # Checks each result locally (is the posting still open? how well does it fit?)
+  # and decides what to send.
+  validate:
+    enabled: true
+    every_minutes: 15
+    concurrency: 2
+    fetch_jd: true
+    host_gap_ms: 5000
+    max_per_run: 60
+
+  # --- Off by default: heavy. Turn one on only if you know you want it. ---
+
+  # A sweep of every company on the big applicant-tracking systems. It can run for
+  # hours and makes thousands of requests.
+  ats_full:
+    enabled: false
+    every_minutes: 1440
+    max_minutes: 480
+    since_days: 3
+    ats: "greenhouse,lever,ashby"
+    resume: true
+    # Also keep postings with no publish date. Leave this off: it only matters for
+    # the extra sources some ATS names add to `ats:` (smartrecruiters, recruitee,
+    # bamboohr, rippling, pinpoint, join), which publish no dates at all, and it
+    # makes a sweep far larger and older. Changing it starts the next sweep fresh.
+    include_undated: false
+
+  # A smaller sweep of venture-backed startups.
+  seeds:
+    enabled: false
+    every_minutes: 1440
+    max_minutes: 120
+    seeds: "yc,a16z"
+    since_days: 7
+
+  # Looks up the career pages of the employers named in `local_employers:` below.
+  local_employers:
+    enabled: false
+    every_minutes: 10080
+    max_minutes: 60
+
+# Job boards the `boards` job reads. Every entry here needs no account or key. They
+# are added to the ones your CareerAutopilot account already lists. Comment out any
+# you do not want.
+boards:
+  - { name: Jobicy, provider: jobicy }
+  - { name: Himalayas, provider: himalayas }
+  - { name: Working Nomads, provider: workingnomads }
+  - { name: NoDesk, provider: nodesk }
+  - { name: The Muse, provider: themuse }
+  - { name: Jobspresso, provider: jobspresso }
+  - { name: Hacker News Who is hiring, provider: hackernews }
+  - { name: 4 Day Week, provider: 4dayweek }
+  - { name: Agentic Engineering Jobs, provider: agentic-jobs }
+  - { name: We Work Remotely, provider: weworkremotely }
+  # --- SOURCES-BEGIN --- (newer board providers; list items only, never a second boards: key)
+  # Workable's own job search (jobs.workable.com): every employer that lists
+  # there, searched by `query` plus `workplace` (remote | hybrid | on_site) and/or
+  # `location`. `day_range` is how many days back to look (1-30); each search
+  # reads at most `max_pages` pages of 20. These four are placeholders: replace
+  # them with the roles you actually want.
+  - { name: Workable jobs, provider: workable-global, day_range: 2, max_pages: 3,
+      searches: [ { query: "software engineer", workplace: remote },
+                  { query: "platform engineer", workplace: remote },
+                  { query: "data engineer", workplace: remote },
+                  { query: "devops engineer", workplace: remote } ] }
+  # EURES, the European Union's public employment services. `countries` are
+  # two-letter codes (put the code for Norway, no, in quotes). The words inside
+  # one search must all match, so use one search per phrase.
+  - { name: EURES, provider: eures, publication_period: last_week, max_pages: 2,
+      searches: [ { keywords: "software engineer", countries: [ie, nl, de, fr] } ] }
+  # Y Combinator's own jobs pages: one page per role and per role + place.
+  - { name: YC jobs, provider: ycombinator-jobs, roles: [software-engineer], locations: [remote] }
+  # Hacker News job posts from Y Combinator companies (the newest 50).
+  - { name: HN job stories, provider: hn-jobs }
+  # JazzHR's global feed. OFF: the first run downloads about 20 MB (then it is
+  # kept for a day) and the listings carry little more than a link. To use it,
+  # remove the leading # from the entry below.
+  # - { name: JazzHR, provider: jazzhr-feed,
+  #     keywords: [software, devops, platform, backend, "full stack", cloud, "machine learning"] }
+  # --- SOURCES-END ---
+  # LinkedIn's public search. It needs no account but it is rate-sensitive: the node
+  # waits 12 seconds or more between requests, and each search costs `pages`
+  # requests. These three are placeholders: replace them with the roles and places
+  # you actually want (keep the list short).
+  - { name: LinkedIn guest search, provider: linkedin-guest, pages: 2, posted_within: week,
+      searches: [ { keywords: "software engineer", location: "United States", remote: true },
+                  { keywords: "data analyst", location: "United States", remote: true },
+                  { keywords: "project manager", location: "United States", remote: true } ] }
+
+# Employer names for the `local_employers` job (off by default).
+local_employers: []
+
+# How the node scores a result before deciding whether to send it. Plain arithmetic
+# on the result's title, place, pay and date: no AI is involved. Your Targeting
+# settings (roles and places) arrive from your account on top of this. Your pay
+# answers do NOT: they are never sent to this computer, and your account applies
+# your pay floor itself when it evaluates the finds you send. To make the node
+# rank by a pay floor of your own, put a yearly figure in US dollars in
+# `floor_usd` below.
+rank:
+  local_terms: []
+  remote_us_terms: [United States, USA, "U.S.", "US-", Americas, North America]
+  floor_usd: null
+  weights: { title_primary: 25, title_secondary: 12, seniority: 15, local: 20, remote_us: 15, authorized_location: 12, sponsor_required_location: 6, comp_at_or_above_floor: 15, fresh_3d: 8, fresh_14d: 4, ats_direct: 5, tracked_company: 5, stack_match_max: 15, pref_work_location_match: 8, pref_sponsorship_offered: 8, pref_sponsorship_unstated: 0 }
+  penalties: { non_us_only: -25, entry_or_intern: -40, stale_45d: -10, trust_flagged: -15, pref_work_location_mismatch: -20, pref_relocation_required: -15, pref_travel_exceeds: -10 }

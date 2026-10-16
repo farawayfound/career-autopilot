@@ -18,4 +18,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      # The discovery node's tests import js-yaml, this package's one runtime
+      # dependency, at the version package-lock.json pins. No install scripts.
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
       - run: node tests/run.mjs

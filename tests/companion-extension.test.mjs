@@ -870,7 +870,7 @@ export { pickOption, labelMatcher, diceCoefficient };
     ok(coSensitiveRe === `/${profileQuestions.SENSITIVE_QUESTION_LABEL_RE.source}/${profileQuestions.SENSITIVE_QUESTION_LABEL_RE.flags}`,
       'companion.js mirror: SENSITIVE_QUESTION_LABEL_RE is byte-identical to profile-questions.mjs\'s real export (regenerate the literal in companion.js whenever the catalog\'s sensitive:true set changes)');
   } else {
-    warn('not in the private repo (autopilot/ is not part of the public export) — HOME_ADDRESS_IDS/WORK_LOCATION_LABEL_RE/SENSITIVE_QUESTION_LABEL_RE byte-parity skipped; tests/companion-field-memory.test.mjs (private-repo-only) covers the same parity');
+    warn('not in the private repo (autopilot/lib/field-taxonomy.mjs and profile-questions.mjs are not part of the public export) — HOME_ADDRESS_IDS/WORK_LOCATION_LABEL_RE/SENSITIVE_QUESTION_LABEL_RE byte-parity skipped; tests/companion-field-memory.test.mjs (private-repo-only) covers the same parity');
   }
 
   // The guard is actually WIRED into the fields/learned loops, not just

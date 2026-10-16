@@ -15,3 +15,17 @@ Career-Ops Companion.app
 career-ops-companion.desktop
 
 node_modules/
+
+# The discovery node's per-computer files, all created the first time you run
+# it: your settings, your token, and what it has found and cached. They belong
+# to this one computer and are never committed.
+config/discovery-node.yml
+config/discovery-node.local.yml
+data/
+*.local.yml
+# The two files the node writes from your account's targeting, beside the
+# package rather than under data/: your title keywords, tracked companies and
+# location tiers (a visa need included), and your city, state, country and time
+# zone. A `git add -A` in a fork must never publish them.
+/portals.yml
+config/profile.yml

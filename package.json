@@ -1,7 +1,7 @@
 {
   "name": "career-autopilot",
   "version": "2.1.0",
-  "description": "CareerAutopilot Companion — a browser extension that fills job application forms from your CareerAutopilot pipeline in your own browser. Never submits; you always click Submit.",
+  "description": "CareerAutopilot, two tools for your own computer: a browser extension that fills job application forms from your CareerAutopilot pipeline (it never submits), and a discovery node that searches public job boards for your targeting and sends matching postings to your own CareerAutopilot account (you start it by hand; it never installs a startup service).",
   "private": false,
   "engines": {
     "node": ">=20"
@@ -9,7 +9,11 @@
   "scripts": {
     "setup": "node extension/setup-companion.mjs --launch",
     "companion": "node extension/dev-launch.mjs",
+    "discovery": "node autopilot/discovery-node-start.mjs",
     "test": "node tests/run.mjs"
+  },
+  "dependencies": {
+    "js-yaml": "^5.3.0"
   },
   "keywords": [
     "job-search",
@@ -17,7 +21,9 @@
     "chrome-extension",
     "career",
     "job-application",
-    "autofill"
+    "autofill",
+    "job-board",
+    "job-discovery"
   ],
   "author": "David Chui",
   "license": "MIT",

@@ -55,3 +55,9 @@ deploy/fleet/** text eol=lf
 # shell - pin both so a checkout on any OS stays executable.
 companion.command text eol=lf
 companion.cmd text eol=crlf
+# The discovery node's launchers, same reasoning. A ZIP download of the public
+# mirror loses the executable bit regardless (docs/DISCOVERY_NODE.md says how to
+# restore it); a clone keeps it.
+discovery-node.command text eol=lf
+discovery-node.sh text eol=lf
+discovery-node.cmd text eol=crlf
