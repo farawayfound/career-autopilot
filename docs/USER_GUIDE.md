@@ -319,6 +319,19 @@ application you unlinked, so submitting the form will not mark the wrong one
 as applied. If you submit without linking the right application, mark it on
 the dashboard.
 
+**⏸ Pause** in the panel header is for a form that fights the auto-fill — the
+usual sign is a page that reloads every time the resume is attached, so the
+fill runs again, attaches it again, and the page never sits still long enough
+to apply. Pause stops it in that tab: nothing fills or uploads by itself,
+including a fill or upload that was still waiting for its field, and it holds
+across reloads of the page. The header turns into **▶ Resume** and a notice
+under it says the tab is paused. ⚡ Fill everything and each row's Insert,
+Copy and Attach still work, so you can finish the form by hand; what the
+extension would do next by itself waits for you — the fill **＋ Process this
+page** starts when it finishes, and a part of the form that appears after you
+pressed ⚡ (press it again). The tab keeps its link, other tabs are not
+affected, and **▶ Resume** (or closing the tab) ends it.
+
 ### Manual (fallback, and non-queue pages)
 
 1. **Open the job's application page** in a normal tab.

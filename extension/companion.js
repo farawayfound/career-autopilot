@@ -1074,6 +1074,7 @@
   // panel merges (filled in any frame wins).
   async function runFill(plan, { waitMs = 1500, strict = false, topHost = '' } = {}) {
     const results = [];
+    const gen = pauseGen;
     if (strict && !frameTrusted(topHost)) return results;
     // A frame we are willing to fill for a known queue item is also a frame
     // whose Submit click is worth watching for. Untrusted frames returned above
@@ -1085,6 +1086,7 @@
     captureTopHost = topHost || captureTopHost;
     const pack = atsPack();
     const controls = await waitForControls(waitMs);
+    if (gen !== pauseGen) return results;
     // `value` is what was ACTUALLY written, which can differ from the plan's
     // context-free default once a learned rule resolves — the panel repaints
     // from this so a row never shows Denver while Littleton was typed.
@@ -1486,6 +1488,13 @@
     }, 1000);
   }
 
+  // Bumped when the candidate pauses the tab (the worker relays the panel's
+  // Pause to every frame). runFill and the two attach handlers read it as they
+  // start and stand down if it moved while they waited for the form — a fill
+  // or upload landing seconds after Pause is the loop Pause exists to break.
+  // One that starts after the pause is a click made while paused, and runs.
+  let pauseGen = 0;
+
   // ── messaging (every frame) ───────────────────────────────────────────────
   const toTop = (payload) => chrome.runtime.sendMessage({ type: 'companion:toTop', payload }).catch(() => {});
 
@@ -1508,6 +1517,10 @@
       // by hand would mark the application they had just unlinked as applied.
       case 'companion:unwatch':
         if (!msg.item || watchedItem === msg.item) watchedItem = null;
+        sendResponse({ ok: true });
+        break;
+      case 'companion:paused':
+        pauseGen += 1;
         sendResponse({ ok: true });
         break;
       case 'companion:collectQuestions':
@@ -1557,6 +1570,7 @@
           // in this frame", and a careers page's third-party chat widget can
           // own one — an unattended resume upload to a stranger is not a
           // recoverable mistake.
+          const gen = pauseGen;
           if (msg.strict && !frameTrusted(msg.topHost)) return;
           // Same lazy-mount problem as the form itself — wait for the file
           // input if the caller allows it.
@@ -1566,7 +1580,7 @@
             await sleep(400);
             input = findResumeInput();
           }
-          if (!input) return;
+          if (!input || gen !== pauseGen) return;
           const bytes = Uint8Array.from(atob(msg.b64), (c) => c.charCodeAt(0));
           const ok = attachFile(input, { bytes, filename: msg.filename, mime: msg.mime });
           toTop({ type: 'companion:resumeAttached', ok, frame: location.hostname });
@@ -1578,6 +1592,7 @@
       // findCoverLetterInput instead.
       case 'companion:attachCoverLetter': {
         (async () => {
+          const gen = pauseGen;
           if (msg.strict && !frameTrusted(msg.topHost)) return;
           let input = findCoverLetterInput();
           const t0 = Date.now();
@@ -1585,7 +1600,7 @@
             await sleep(400);
             input = findCoverLetterInput();
           }
-          if (!input) return;
+          if (!input || gen !== pauseGen) return;
           const bytes = Uint8Array.from(atob(msg.b64), (c) => c.charCodeAt(0));
           const ok = attachFile(input, { bytes, filename: msg.filename, mime: msg.mime });
           toTop({ type: 'companion:coverLetterAttached', ok, frame: location.hostname });
@@ -1705,6 +1720,7 @@
   let liveFillRows = []; // [{id, label, status, value, note}] — the last Live-fill run's own results
   let liveFillRemembered = {}; // { fieldId: entryId } — the last live-fill response's own ledger recordings, so a fill that lands is marked used
   let activeTab = 'fill'; // 'fill' | 'ai' | 'message' — the panel body shows one at a time; only Fill auto-runs
+  let autoPaused = false; // this tab's Pause, as the worker last told it (sw.js setAutoPause)
   // "Remembered answers" (AI tab) — the server-side per-application ledger
   // every draft/live-fill call writes into. rememberedApps is the dropdown's
   // own option list; rememberedSel survives a tab switch/reload so the
@@ -1738,6 +1754,7 @@
     'companion:getCoverLetter', 'companion:getAnswers', 'companion:getKbStatus', 'companion:getLearned',
     'companion:getLiveFillNextSteps', 'companion:getPanelPos', 'companion:getPanelCollapsed',
     'companion:setTabLink', 'companion:unlinkTab', 'companion:resumeAutoLink', 'companion:setPanelOpen',
+    'companion:getAutoPause', 'companion:setAutoPause',
     'companion:setLiveFillNextSteps', 'companion:setPanelPos', 'companion:resetPanelPos', 'companion:setPanelCollapsed',
     'companion:link',
   ]);
@@ -1870,6 +1887,45 @@
     }
   }
 
+  // Pause: the candidate takes this tab's form over by hand (see sw.js
+  // setAutoPause for the loop it breaks). The header button says which state
+  // the tab is in, and the notice under it says so out loud — a panel that
+  // stopped filling with nothing on screen would read as broken.
+  function paintPause() {
+    const btn = root.getElementById('co-pause');
+    if (!btn) return;
+    btn.textContent = autoPaused ? '▶ Resume' : '⏸ Pause';
+    btn.title = autoPaused
+      ? 'Let this tab fill by itself again from the next page load'
+      : 'Stop filling and uploading by itself in this tab, across reloads, so you can finish the form by hand';
+    root.getElementById('co-paused').hidden = !autoPaused;
+  }
+
+  // null when the worker could not answer: the panel keeps what it knew, and
+  // every automatic fill treats null as paused — falling back to "not paused"
+  // would restart the very fills the candidate stopped.
+  async function readAutoPause() {
+    const res = await send({ type: 'companion:getAutoPause' });
+    if (!res || !res.ok) return null;
+    autoPaused = Boolean(res.paused);
+    paintPause();
+    return autoPaused;
+  }
+
+  async function toggleAutoPause() {
+    const paused = !autoPaused;
+    const res = await send({ type: 'companion:setAutoPause', paused });
+    if (!res || !res.ok) {
+      setStatusLine(`Could not ${paused ? 'pause' : 'resume'} auto-fill — ${(res && res.error) || 'the extension did not answer'}`, true);
+      return;
+    }
+    autoPaused = paused;
+    paintPause();
+    setStatusLine(paused
+      ? 'Auto-fill paused in this tab — nothing fills or uploads by itself, even when the page reloads. The buttons below still work.'
+      : 'Auto-fill resumed — the next page load in this tab fills by itself again.');
+  }
+
   async function loadPlan(itemId = null) {
     planLoad += 1;
     const load = planLoad;
@@ -1975,8 +2031,8 @@
   // reveals) — replay the fill into THAT frame only. Broadcasting to every
   // frame would re-run the plan over forms the candidate has since edited;
   // the 'already' guards are the second line of defence, not the first.
-  panelBus['companion:frameAdded'] = ({ frameId }) => {
-    if (!plan || !rowStatus.size || frameId == null) return;
+  panelBus['companion:frameAdded'] = async ({ frameId }) => {
+    if (!plan || !rowStatus.size || frameId == null || (await readAutoPause()) !== false) return;
     broadcast({ type: 'companion:runFill', plan, waitMs: 4000, ...autoScope }, frameId);
     if (resumeCache && rowStatus.get('resume') !== 'filled') {
       broadcast({ type: 'companion:attachResume', b64: resumeCache.b64, filename: resumeCache.filename, mime: resumeCache.mime, waitMs: 4000, ...autoScope }, frameId);
@@ -2390,19 +2446,35 @@
   // own "Draft open questions" button, one explicit click, never bundled in
   // here — no inference call may fire without the candidate having asked for
   // it. Nothing here submits.
+  //
+  // A paused tab holds every automatic call (asked of the worker, not read off
+  // the button: an auto-run can reach a panel that has not loaded the mark
+  // yet), and so does one whose read failed or that a Pause overtook while the
+  // read was out; the ⚡ click still fills. Either way a Pause that lands while
+  // a file downloads stops the upload that would have followed it.
   async function fillEverything({ auto = false } = {}) {
     if (!plan || running) return;
     running = true;
+    const gen = pauseGen;
     try {
+      if (auto) {
+        const paused = await readAutoPause();
+        if (paused !== false || gen !== pauseGen) {
+          setStatusLine(paused === null
+            ? 'Could not check whether auto-fill is paused in this tab, so nothing was filled by itself. ⚡ Fill everything still works.'
+            : 'Auto-fill is paused in this tab — nothing was filled. ⚡ Fill everything still works, or press ▶ Resume.', paused === null);
+          return;
+        }
+      }
       setStatusLine(auto ? `Matched ${plan.item ? plan.item.company : 'this page'} — auto-filling…` : 'Filling…');
       broadcast({ type: 'companion:runFill', plan, waitMs: auto ? 8000 : 2500, ...autoScope });
       if (plan.resume && plan.resume.available) {
         const r = await getResume();
-        if (r) broadcast({ type: 'companion:attachResume', b64: r.b64, filename: r.filename, mime: r.mime, waitMs: auto ? 10000 : 4000, ...autoScope });
+        if (r && gen === pauseGen) broadcast({ type: 'companion:attachResume', b64: r.b64, filename: r.filename, mime: r.mime, waitMs: auto ? 10000 : 4000, ...autoScope });
       }
       if (plan.cover_letter_file && plan.cover_letter_file.available) {
         const r = await getCoverLetterFile();
-        if (r) broadcast({ type: 'companion:attachCoverLetter', b64: r.b64, filename: r.filename, mime: r.mime, waitMs: auto ? 10000 : 4000, ...autoScope });
+        if (r && gen === pauseGen) broadcast({ type: 'companion:attachCoverLetter', b64: r.b64, filename: r.filename, mime: r.mime, waitMs: auto ? 10000 : 4000, ...autoScope });
       }
     } finally {
       running = false;
@@ -3394,12 +3466,13 @@
         .co-panel.collapsed .co-tabs, .co-panel.collapsed .co-linked, .co-panel.collapsed .co-actions,
         .co-panel.collapsed .co-status, .co-panel.collapsed .co-body, .co-panel.collapsed .co-foot { display: none; }
         .co-panel.collapsed .co-head { padding: 0; height: 40px; border: 0; justify-content: center; cursor: pointer; }
-        .co-panel.collapsed .co-head strong, .co-panel.collapsed #co-refresh, .co-panel.collapsed #co-close { display: none; }
+        .co-panel.collapsed .co-head strong, .co-panel.collapsed #co-pause, .co-panel.collapsed #co-refresh, .co-panel.collapsed #co-close { display: none; }
         .co-panel.collapsed #co-collapse { width: 100%; height: 100%; border: 0; border-radius: 50%; font-size: 16px; }
       </style>
       <div class="co-panel">
         <div class="co-head">
           <strong>⚡ CareerAutopilot</strong>
+          <button class="co-btn" id="co-pause">⏸ Pause</button>
           <button class="co-btn" id="co-collapse" title="Collapse to a small pill — the panel keeps working, out of the way">⤢</button>
           <button class="co-btn" id="co-refresh" title="Reload the fill plan">⟳</button>
           <button class="co-btn" id="co-close" title="Close">✕</button>
@@ -3410,6 +3483,7 @@
           <button class="co-tab" data-tab="message" title="Draft a reply or first message from your CV">Generate message</button>
         </div>
         <div class="co-linked" id="co-linked" hidden></div>
+        <div class="co-linked" id="co-paused" hidden>Auto-fill is paused in this tab — nothing fills or uploads by itself until you press ▶ Resume.</div>
         <div class="co-hint co-warn" id="co-consent-hint" hidden></div>
         <div class="co-actions" id="co-actions">
           <button class="co-btn co-primary" id="co-autofill" title="Fill contact fields and answers, attach the resume and cover letter — whatever fails stays in the list below. Never submits.">⚡ Fill everything</button>
@@ -3422,6 +3496,9 @@
       </div>`;
     root.getElementById('co-close').addEventListener('mousedown', (e) => e.preventDefault());
     root.getElementById('co-close').addEventListener('click', () => closePanel());
+    root.getElementById('co-pause').addEventListener('mousedown', (e) => e.preventDefault());
+    root.getElementById('co-pause').addEventListener('click', () => toggleAutoPause());
+    readAutoPause();
     root.getElementById('co-refresh').addEventListener('mousedown', (e) => e.preventDefault());
     root.getElementById('co-refresh').addEventListener('click', () => loadPlan(plan && plan.item ? plan.item.id : null));
     root.getElementById('co-autofill').addEventListener('mousedown', (e) => e.preventDefault());

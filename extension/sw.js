@@ -323,6 +323,27 @@ async function unlinkTab(tabId, item) {
   } catch { /* tab already gone */ }
 }
 
+// ── Pause: the candidate fills this tab by hand ─────────────────────────────
+// Some forms reload themselves when a file lands on them. Under auto-run that
+// loops — every reload re-fills the form and re-attaches the resume, which
+// reloads it again — and Unlink is a poor way out: it drops the link and the
+// submit tracking, and a relink already on its way to the next load can link
+// the tab again (the panel's item load re-sends setTabLink). While this mark
+// stands no page load in the tab starts an auto-run, linked or not
+// (maybeAutoRun), and the panel holds every fill it would start by itself.
+// Pausing also tells every frame, so a fill or upload still waiting for its
+// field stands down. Only the candidate's Resume or closing the tab ends it;
+// the link, if any, is left as it was. Read and written without sessionGet/
+// sessionSet's swallow, so it fails closed: a read that throws ends
+// maybeAutoRun in its catch, and a write that throws is a failed Pause.
+const autoPausedOf = async (tabId) => Boolean((await chrome.storage.session.get({ autoPaused: {} })).autoPaused[tabId]);
+async function setAutoPause(tabId, paused) {
+  const { autoPaused: m } = await chrome.storage.session.get({ autoPaused: {} });
+  if (paused) m[tabId] = true; else delete m[tabId];
+  await chrome.storage.session.set({ autoPaused: m });
+  if (paused) chrome.tabs.sendMessage(tabId, { type: 'companion:paused' }).catch(() => {});
+}
+
 // The plan a panel asked for. An explicit item is the candidate's own pick
 // (the picker, the Link button, a page they had processed) and is always
 // honored. Without one the server matches the page's URL to a queue item —
@@ -348,7 +369,7 @@ async function planFor(tabId, msg) {
 }
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit', 'tabLink', 'autoLinkOff', 'panelOpen', 'liveFillNextSteps']) {
+  for (const key of ['injectedTabs', 'autoRan', 'pendingSubmit', 'tabLink', 'autoLinkOff', 'autoPaused', 'panelOpen', 'liveFillNextSteps']) {
     const map = await sessionGet(key, {});
     if (tabId in map) { delete map[tabId]; await sessionSet(key, map); }
   }
@@ -404,6 +425,9 @@ async function maybeAutoRun(tabId, url) {
   if (inflight.has(claim)) return;
   inflight.add(claim);
   try {
+    // A paused tab starts nothing, before either path below looks anything up.
+    // Unrecorded, like an unlinked tab, so Resume finds the page as it was.
+    if (await autoPausedOf(tabId)) return;
     // Multi-page relink (items 6/8), checked BEFORE the ordinary URL-match
     // gate below: a tab already linked to a queue item re-fetches THAT
     // item's plan on every navigation, so a Continue/next-step page never
@@ -424,8 +448,9 @@ async function maybeAutoRun(tabId, url) {
           // The candidate can unlink (or link something else) while that
           // request is out, and the answer is then about a link that no
           // longer stands — sending it on would put the link straight back.
+          // A Pause clicked meanwhile holds it the same way.
           const current = await tabLinkOf(tabId);
-          if (!current || current.item !== link.item) return;
+          if (!current || current.item !== link.item || await autoPausedOf(tabId)) return;
           await injectCompanion(tabId);
           const reopen = await panelOpenOf(tabId);
           await chrome.tabs.sendMessage(tabId, { type: 'companion:autorun', relink: true, item: link.item, reopen }, { frameId: 0 }).catch(() => {});
@@ -459,8 +484,8 @@ async function maybeAutoRun(tabId, url) {
     // Unconfigured or server down — stay silent AND stay unrecorded, so a
     // later navigation retries instead of writing the URL off permanently.
     if (!plan || !plan.ok) return;
-    // Unlinked while that request was out — same rule, checked again.
-    if (await autoLinkOffOf(tabId)) return;
+    // Unlinked or paused while that request was out — same rules, checked again.
+    if (await autoLinkOffOf(tabId) || await autoPausedOf(tabId)) return;
     await markAutoRan(tabId, url);
     try {
       await chrome.action.setBadgeText({ tabId, text: plan.mode === 'item' ? '✓' : '' });
@@ -762,6 +787,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       case 'companion:resumeAutoLink':
         if (tabId != null) await clearAutoLinkOff(tabId);
+        sendResponse({ ok: true });
+        break;
+      // The panel's Pause/Resume — see setAutoPause above.
+      case 'companion:getAutoPause':
+        if (tabId == null) { sendResponse({ ok: false, error: 'no tab to read' }); break; }
+        sendResponse({ ok: true, paused: await autoPausedOf(tabId) });
+        break;
+      case 'companion:setAutoPause':
+        if (tabId == null) { sendResponse({ ok: false, error: 'no tab to pause' }); break; }
+        await setAutoPause(tabId, Boolean(msg.paused));
         sendResponse({ ok: true });
         break;
       case 'companion:setPanelOpen':

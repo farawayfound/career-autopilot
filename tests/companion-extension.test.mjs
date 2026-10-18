@@ -1712,5 +1712,5 @@ export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
 // The version is how the candidate can tell, on chrome://extensions, that a
 // reload actually picked up a fix.
 {
-  ok(MANIFEST.version === '0.4.5', 'manifest version bumped to 0.4.5 for the rename to CareerAutopilot Companion');
+  ok(MANIFEST.version === '0.4.6', 'manifest version bumped to 0.4.6 for the panel\'s Pause');
 }
