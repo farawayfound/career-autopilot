@@ -130,6 +130,16 @@ export function loadConfig() {
   cfg.writing.review_pass ??= false;
   cfg.writing.min_words ??= 170;
   cfg.writing.max_words ??= 330;
+  // The humanizer pass (lib/humanize.mjs): on by default for the cover letter
+  // only — the piece it was measured and tuned for. Screening answers and the
+  // tailored CV's summary are opt-in (Admin -> Models -> Writing).
+  cfg.writing.humanizer ??= {};
+  cfg.writing.humanizer.enabled ??= true;
+  cfg.writing.humanizer.cover_letter ??= true;
+  cfg.writing.humanizer.resume ??= false;
+  cfg.writing.humanizer.answers ??= false;
+  // How much longer than the draft a rewrite may come back, in percent.
+  cfg.writing.humanizer.max_longer_pct ??= 10;
   // The hub's own coordinates, copied onto the inference block. `new
   // LlmPool(cfg.inference)` is the constructor every consumer in this repo
   // calls, and the lane planner needs the hub's URL and admin token — which
