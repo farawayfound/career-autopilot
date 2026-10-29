@@ -22,6 +22,17 @@ import { fetchJsonWithRetry } from './_http.mjs';
 //
 // Wire in via a `job_boards:` entry with `provider: a16z-speedrun-talent`, or point
 // `careers_url` at https://speedrun-talent-network.com (auto-detected).
+//
+// Since 2026-10-29 the feed's own filters ride on the entry as `filters:` —
+// the keys the feed documents at /api/v1/openapi.json (FILTER_KEYS below, an
+// allowlist: anything else is ignored), e.g.
+//   filters: { fn: "engineering,research", posted: 7d, sort: new, scope: everywhere }
+// so a node can read the week's newest engineering roles across the whole
+// network (~23k live postings) instead of the first N pages of everything.
+// Each posting's `comp_min`/`comp_max`/`comp_currency`/`comp_period` land on
+// the job as `salary` (annualised), which the scanner writes into the
+// pipeline row's comp cell — the feed is where the "posted band up front"
+// numbers come from.
 
 const FEED_BASE = 'https://speedrun-talent-network.com/api/v1/jobs';
 const TRUSTED_HOST = 'speedrun-talent-network.com';
@@ -58,6 +69,65 @@ function resolveMaxPages(entry) {
   return DEFAULT_MAX_PAGES;
 }
 
+// The feed's documented query parameters (GET /api/v1/jobs, per its OpenAPI
+// document on 2026-10-29). Only these are forwarded from `filters:`; `q`,
+// `page` and `source` are the provider's own. Values are strings or numbers
+// (arrays are joined with commas, the feed's own list syntax).
+export const FILTER_KEYS = Object.freeze([
+  'fn', 'spec', 'sen', 'lvl', 'yoe', 'eng', 'founding', 'ai', 'emp', 'loc', 'remote', 'wp', 'metro',
+  'comp', 'comp_max', 'comp_any', 'posted', 'stage', 'size', 'industry', 'lab', 'bigtech', 'portfolio',
+  'cohort', 'company', 'stealth', 'scope', 'sort',
+]);
+const FILTER_VALUE_RE = /^[A-Za-z0-9_,.:+ -]{1,120}$/;
+
+/** The `filters:` block of an entry as [key, value] pairs the feed accepts. Exported for unit tests. */
+export function resolveFilters(entry) {
+  const raw = entry?.filters;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const out = [];
+  for (const key of FILTER_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+    let value = raw[key];
+    if (Array.isArray(value)) value = value.filter((v) => v != null && String(v).trim()).map((v) => String(v).trim()).join(',');
+    if (value === true) value = '1';
+    if (value === false || value == null) continue;
+    const str = String(value).trim();
+    if (!str || !FILTER_VALUE_RE.test(str)) continue;
+    out.push([key, str]);
+  }
+  return out;
+}
+
+// Annualisation for the feed's `comp_period`. Unknown or absent periods are
+// read as annual — the feed's `comp` filter is documented as matching the
+// "posted ANNUAL band", so that is its own default too.
+const PERIOD_MULTIPLIER = { hour: 2080, hourly: 2080, day: 260, daily: 260, week: 52, weekly: 52, month: 12, monthly: 12, year: 1, yearly: 1, annual: 1 };
+
+/**
+ * The posting's own band as the scanner's `salary` shape, or null when the
+ * feed states none. Exported for unit tests.
+ *
+ * @param {any} j
+ * @returns {{min: number, max: number, currency: string}|null}
+ */
+export function speedrunSalary(j) {
+  const num = (v) => {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const min = num(j?.comp_min);
+  const max = num(j?.comp_max);
+  if (min === null && max === null) return null;
+  const period = String(j?.comp_period ?? '').trim().toLowerCase();
+  const mult = PERIOD_MULTIPLIER[period] ?? 1;
+  const lo = (min ?? max) * mult;
+  const hi = (max ?? min) * mult;
+  const currency = typeof j?.comp_currency === 'string' && /^[A-Za-z]{3}$/.test(j.comp_currency.trim())
+    ? j.comp_currency.trim().toUpperCase() : 'USD';
+  return { min: Math.min(lo, hi), max: Math.max(lo, hi), currency };
+}
+
 /** Optional server-side query: `q:` on the entry, else joined `keywords:`. */
 function resolveQuery(entry) {
   if (typeof entry?.q === 'string' && entry.q.trim()) return entry.q.trim();
@@ -90,6 +160,9 @@ function toEpochMs(value) {
  *   - location: `location`; "Remote" is appended when `remote` is true.
  *   - postedAt: `published_at` ISO date → epoch ms (omitted when absent or
  *               unparseable).
+ *   - salary:   `comp_min`/`comp_max`/`comp_currency`/`comp_period` →
+ *               {min, max, currency}, annualised (omitted when the feed
+ *               states no band).
  *
  * @param {any} j
  * @param {string} [fallbackCompany]
@@ -123,10 +196,12 @@ export function normalizeSpeedrunJob(j, fallbackCompany) {
   const base = typeof j.location === 'string' ? j.location.trim() : '';
   const location = [base, j.remote === true ? 'Remote' : ''].filter(Boolean).join(', ');
 
-  /** @type {{ title: string, url: string, company: string, location: string, postedAt?: number }} */
+  /** @type {{ title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min: number, max: number, currency: string} }} */
   const job = { title, url, company, location };
   const postedAt = toEpochMs(j.published_at);
   if (postedAt !== undefined) job.postedAt = postedAt;
+  const salary = speedrunSalary(j);
+  if (salary) job.salary = salary;
   return job;
 }
 
@@ -153,12 +228,14 @@ export default {
     assertFeedUrl(FEED_BASE);
     const maxPages = resolveMaxPages(entry);
     const q = resolveQuery(entry);
+    const filters = resolveFilters(entry);
     const fallbackCompany = entry?.name;
     const out = [];
 
     for (let page = 0; page < maxPages; page++) {
       const params = new URLSearchParams({ page: String(page), source: 'career-ops' });
       if (q) params.set('q', q);
+      for (const [key, value] of filters) params.set(key, value);
       const url = `${FEED_BASE}?${params}`;
       // redirect:'error' prevents SSRF via server-side redirects.
       // Retried on transient upstream failures (429/5xx/timeout): this board

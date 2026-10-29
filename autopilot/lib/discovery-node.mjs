@@ -957,6 +957,12 @@ export function scoreFind(row, ctx = {}) {
   if (prefSignals.drop) dropReason = dropReason || prefSignals.drop;
 
   // -- compensation --
+  // A posted band that tops out under the candidate's floor is a PENALTY
+  // (`penalties.comp_below_floor`), never a drop (2026-10-29): a strong local
+  // senior role with a low posted band is still worth a look, and the
+  // evaluation step weighs the whole package. A posting that states no pay
+  // at all scores nothing either way — `comp-unknown` is a visible reason,
+  // not a deduction. Only `comp_at_or_above_floor` adds points.
   const floor = Number.isFinite(rank.floor_usd) ? rank.floor_usd : ctx.criteria?.floorUsd;
   const comp = row.comp || (ctx.jdText ? parseCompensation(ctx.jdText) : null);
   if (comp && Number.isFinite(floor)) {
@@ -965,7 +971,7 @@ export function scoreFind(row, ctx = {}) {
     if (hasMin && hasMax) {
       if (comp.max < floor) {
         reasons.push('comp_below_floor');
-        dropReason = dropReason || 'comp_below_floor';
+        score += pen('comp_below_floor');
       } else if (comp.min >= floor) {
         reasons.push('comp_at_or_above_floor');
         score += w('comp_at_or_above_floor');
@@ -973,13 +979,13 @@ export function scoreFind(row, ctx = {}) {
         reasons.push('comp-straddles-floor');
       }
     } else if (hasMin || hasMax) {
-      // Only one bound known — a lower bar (floor x 0.9) before dropping,
+      // Only one bound known — a lower bar (floor x 0.9) before penalising,
       // since a lone number might be a stated minimum on a range whose real
       // ceiling is comfortably above the floor.
       const only = hasMax ? comp.max : comp.min;
       if (only < floor * 0.9) {
         reasons.push('comp_below_floor');
-        dropReason = dropReason || 'comp_below_floor';
+        score += pen('comp_below_floor');
       } else if (only >= floor) {
         reasons.push('comp_at_or_above_floor');
         score += w('comp_at_or_above_floor');

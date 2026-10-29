@@ -68,6 +68,11 @@ export const GUEST_NODE_HOSTS = Object.freeze([
   { host: 'nodesk.co', path: /^\/remote-jobs\// },
   { host: 'jobspresso.co', path: /^\/(?:job|jobs|remote-jobs)\// },
   { host: '4dayweek.io', path: /^\/(?:remote-)?jobs?\// },
+  // The a16z speedrun talent network (providers/a16z-speedrun-talent.mjs):
+  // every posting page is server-rendered with schema.org JobPosting data
+  // and the employer's own ATS apply link, so a hosted node's find there is
+  // fetchable the way the other listing hosts above are.
+  { host: 'speedrun-talent-network.com', www: true, path: /^\/jobs\// },
   { host: 'arbeitnow.com', www: true, path: /^\/jobs\// },
   { host: 'agentic-engineering-jobs.com', www: true },
 ]);

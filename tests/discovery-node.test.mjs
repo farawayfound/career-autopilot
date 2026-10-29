@@ -106,7 +106,7 @@ const RANK = {
   remote_us_terms: ['United States', 'USA', 'U.S.', 'US-', 'Americas', 'North America'],
   floor_usd: null,
   weights: { title_primary: 25, title_secondary: 12, seniority: 15, local: 20, remote_us: 15, comp_at_or_above_floor: 15, fresh_3d: 8, fresh_14d: 4, ats_direct: 5, tracked_company: 5, stack_match_max: 15 },
-  penalties: { non_us_only: -25, entry_or_intern: -40, stale_45d: -10, trust_flagged: -15 },
+  penalties: { non_us_only: -25, entry_or_intern: -40, stale_45d: -10, trust_flagged: -15, comp_below_floor: -20 },
 };
 const baseRow = () => ({ url: 'https://example.com/careers/1', company: '', title: '', location: '', comp: null, posted: null, trust: null });
 
@@ -150,20 +150,26 @@ const baseRow = () => ({ url: 'https://example.com/careers/1', company: '', titl
 }
 
 {
-  // Comp max below floor -> drop.
+  // Comp max below floor -> a PENALTY, never a drop (2026-10-29): the row keeps
+  // scoring on everything else and the evaluation weighs the whole package.
   const row = { ...baseRow(), title: 'Software Engineer', location: 'Denver, CO', comp: { min: 50000, max: 80000, currency: 'USD' } };
   const ctx = { criteria: { titleFilter: {}, targetRoles: { primary: [], archetypeNames: [] }, floorUsd: 150000 }, rank: RANK };
   const scored = scoreFind(row, ctx);
-  eq(scored.drop_reason, 'comp_below_floor', 'comp.max below the floor drops with comp_below_floor');
-  eq(decideFind(scored, 40).decision, 'drop', 'decideFind reports drop for a comp_below_floor score');
+  ok(scored.reasons.includes('comp_below_floor'), 'comp.max below the floor is recorded as comp_below_floor');
+  eq(scored.drop_reason, null, 'and is not a drop reason');
+  const same = scoreFind({ ...row, comp: null }, ctx);
+  eq(scored.score, Math.max(0, same.score + RANK.penalties.comp_below_floor), 'it costs exactly penalties.comp_below_floor against the same row with no pay stated');
+  ok(decideFind(scored, 40).decision !== 'drop', 'decideFind never drops on pay alone');
+  const noPenalty = scoreFind(row, { ...ctx, rank: { ...RANK, penalties: { ...RANK.penalties, comp_below_floor: 0 } } });
+  eq(noPenalty.score, same.score, 'a node whose config lacks the key (reads as 0) is unchanged from an unstated band');
 }
 
 {
-  // A single-bound comp below floor*0.9 also drops; between 0.9x and floor is a straddle (no drop, no points).
+  // A single-bound comp below floor*0.9 is penalised too; between 0.9x and floor is a straddle (no penalty, no points).
   const floor = 150000;
   const dropRow = { ...baseRow(), comp: { min: 100000 } }; // 100000 < 150000*0.9
   const dropped = scoreFind(dropRow, { criteria: { targetRoles: {}, floorUsd: floor }, rank: RANK });
-  eq(dropped.drop_reason, 'comp_below_floor', 'a lone comp bound under floor*0.9 also drops');
+  ok(dropped.reasons.includes('comp_below_floor') && dropped.drop_reason === null, 'a lone comp bound under floor*0.9 is penalised, not dropped');
 
   const straddleRow = { ...baseRow(), comp: { min: 100000, max: 200000 } }; // min < floor <= max
   const straddled = scoreFind(straddleRow, { criteria: { targetRoles: {}, floorUsd: floor }, rank: RANK });

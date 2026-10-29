@@ -116,6 +116,9 @@ export function loadConfig() {
   }
   cfg.autopilot ??= {};
   cfg.autopilot.min_score_to_package ??= 3.8;
+  // Evaluate calls per posting (autopilot.mjs evaluateSampleCount): 1 by
+  // default; more means each answer on its own seed and the median kept.
+  cfg.autopilot.evaluate_samples ??= 1;
   cfg.autopilot.max_new_offers_per_cycle ??= 8;
   cfg.autopilot.offer_concurrency ??= 2;
   cfg.autopilot.cycle_interval_hours ??= 6;
