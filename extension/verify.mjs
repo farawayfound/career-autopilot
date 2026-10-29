@@ -111,7 +111,7 @@ async function optionsPage(context, extensionId) {
  * message at all.
  *
  * @returns {Promise<{baseUrl: string|null, tokenLength: number, storedFingerprint: string|null,
- *   bundledFingerprint: string|null, autoRun: boolean, autoDraft: boolean, autoRunAll: boolean,
+ *   bundledFingerprint: string|null, autoOpen: boolean, autoDraft: boolean, autoRunAll: boolean,
  *   reloaded: boolean, answered: boolean}>}
  */
 export async function readConfig(context, extensionId, existingPage) {
@@ -136,7 +136,9 @@ export async function readConfig(context, extensionId, existingPage) {
   }
   const stored = await page.evaluate(async () => {
     const cfg = await chrome.storage.local.get({
-      baseUrl: '', token: '', bundledFingerprint: '', autoRun: true, autoDraft: true, autoRunAll: false,
+      // autoOpen replaced autoRun on 2026-10-29 (a match opens the panel; it
+      // no longer fills); a stored autoRun stands in for an unset autoOpen.
+      baseUrl: '', token: '', bundledFingerprint: '', autoOpen: null, autoRun: true, autoDraft: true, autoRunAll: false,
     });
     let storedFingerprint = null;
     if (cfg.baseUrl && cfg.token) {
@@ -148,7 +150,7 @@ export async function readConfig(context, extensionId, existingPage) {
       tokenLength: (cfg.token || '').length,
       storedFingerprint,
       bundledFingerprint: cfg.bundledFingerprint || null,
-      autoRun: cfg.autoRun,
+      autoOpen: cfg.autoOpen === null ? Boolean(cfg.autoRun) : Boolean(cfg.autoOpen),
       autoDraft: cfg.autoDraft,
       autoRunAll: cfg.autoRunAll,
     };

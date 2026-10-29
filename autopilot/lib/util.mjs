@@ -140,6 +140,13 @@ export function loadConfig() {
   cfg.writing.humanizer.answers ??= false;
   // How much longer than the draft a rewrite may come back, in percent.
   cfg.writing.humanizer.max_longer_pct ??= 10;
+  // The valediction every letter ends with, over the profile's name. The
+  // model's own `signoff` is never printed (lib/writing-guards.mjs
+  // normalizeCoverLetter) — this string is. The literal is writing-guards'
+  // DEFAULT_VALEDICTION, repeated rather than imported: this module is in the
+  // public export and writing-guards.mjs is not (tests/cover-letter-signoff
+  // pins the two to the same value).
+  cfg.writing.signoff ??= 'Best regards,';
   // The hub's own coordinates, copied onto the inference block. `new
   // LlmPool(cfg.inference)` is the constructor every consumer in this repo
   // calls, and the lane planner needs the hub's URL and admin token — which

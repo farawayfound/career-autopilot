@@ -41,6 +41,27 @@
     return Boolean(topHost) && registrable(location.hostname) === registrable(topHost);
   }
 
+  // ── the candidate's own dashboard ─────────────────────────────────────────
+  // The server this companion is configured against serves the candidate's
+  // own dashboard, whose Profile tab holds their MASTER résumé and details.
+  // It is never an application form: no fill and no upload there, in any
+  // frame, click or no click — a tailored résumé meant for an employer must
+  // never replace the master one. The worker answers with the host once per
+  // frame; a worker that cannot answer is read as "not the dashboard", so an
+  // ordinary application page is never blocked by a worker blip (the worker
+  // refuses the dashboard on its own side too, sw.js isOwnServerUrl).
+  const OWN_DASHBOARD_MSG = 'This is your own CareerAutopilot dashboard — the companion never fills or uploads here. Open the job application page instead.';
+  let ownServerHost; // undefined until the worker has been asked
+  async function onOwnServerSite() {
+    if (ownServerHost === undefined) {
+      try {
+        const r = await chrome.runtime.sendMessage({ type: 'companion:getServerHost' });
+        ownServerHost = String((r && r.host) || '').toLowerCase();
+      } catch { ownServerHost = ''; }
+    }
+    return Boolean(ownServerHost) && location.hostname.toLowerCase().replace(/^www\./, '') === ownServerHost;
+  }
+
   // ── focus tracking ────────────────────────────────────────────────────────
   // Panel buttons prevent default on mousedown so clicking them never blurs
   // the page's field — but we also remember the last focused editable as a
@@ -960,7 +981,7 @@
 
   // Many ATSes mount the form lazily (SPA route, an Apply button that reveals
   // it). Rather than fill against an empty DOM, poll briefly until controls
-  // exist — auto-run passes a longer window than a manual click.
+  // exist — the Process follow-on passes a longer window than a manual click.
   async function waitForControls(maxMs = 0) {
     let controls = collectControls();
     const t0 = Date.now();
@@ -1076,6 +1097,8 @@
     const results = [];
     const gen = pauseGen;
     if (strict && !frameTrusted(topHost)) return results;
+    // Never the candidate's own dashboard, strict or not.
+    if (await onOwnServerSite()) return results;
     // A frame we are willing to fill for a known queue item is also a frame
     // whose Submit click is worth watching for. Untrusted frames returned above
     // and never arm.
@@ -1572,6 +1595,9 @@
           // recoverable mistake.
           const gen = pauseGen;
           if (msg.strict && !frameTrusted(msg.topHost)) return;
+          // The dashboard's own résumé uploader is the master résumé's —
+          // refused outright, and the panel is told why.
+          if (await onOwnServerSite()) { toTop({ type: 'companion:resumeAttached', ok: false, frame: location.hostname, reason: 'own-dashboard' }); return; }
           // Same lazy-mount problem as the form itself — wait for the file
           // input if the caller allows it.
           let input = findResumeInput();
@@ -1594,6 +1620,7 @@
         (async () => {
           const gen = pauseGen;
           if (msg.strict && !frameTrusted(msg.topHost)) return;
+          if (await onOwnServerSite()) { toTop({ type: 'companion:coverLetterAttached', ok: false, frame: location.hostname, reason: 'own-dashboard' }); return; }
           let input = findCoverLetterInput();
           const t0 = Date.now();
           while (!input && Date.now() - t0 < (msg.waitMs || 0)) {
@@ -1630,6 +1657,7 @@
       case 'companion:applyLiveFill': {
         (async () => {
           if (msg.strict && !frameTrusted(msg.topHost)) return;
+          if (await onOwnServerSite()) return;
           const results = [];
           for (const f of msg.fills || []) {
             const el = document.querySelector(`[data-co-live-fill-id="${CSS.escape(f.id)}"]`);
@@ -1719,7 +1747,7 @@
   let liveFillGather = null; // in-flight harvest() gather window
   let liveFillRows = []; // [{id, label, status, value, note}] — the last Live-fill run's own results
   let liveFillRemembered = {}; // { fieldId: entryId } — the last live-fill response's own ledger recordings, so a fill that lands is marked used
-  let activeTab = 'fill'; // 'fill' | 'ai' | 'message' — the panel body shows one at a time; only Fill auto-runs
+  let activeTab = 'fill'; // 'fill' | 'ai' | 'message' — the panel body shows one at a time; only Fill is opened by a match
   let autoPaused = false; // this tab's Pause, as the worker last told it (sw.js setAutoPause)
   // "Remembered answers" (AI tab) — the server-side per-application ledger
   // every draft/live-fill call writes into. rememberedApps is the dropdown's
@@ -1788,6 +1816,12 @@
   // recognise that they are not part of this application and stand down.
   const autoScope = { strict: true, topHost: location.hostname };
   let running = false; // fillEverything reentrancy guard
+  // When the candidate's last ⚡ (or the Process follow-on) started — the
+  // late-frame replay (the frameAdded handler below) runs only within
+  // LATE_FRAME_MS of it; a frame mounted later belongs to whatever the page
+  // shows by then, not to that click.
+  const LATE_FRAME_MS = 30_000;
+  let lastFillAt = 0;
 
   async function copyText(text) {
     try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
@@ -1830,7 +1864,7 @@
     return { title: clean(document.title).slice(0, 200), h1: h1.slice(0, 200), company: siteName.slice(0, 120) };
   }
 
-  // Newest load wins. Two can be out at once — a relink auto-run racing the
+  // Newest load wins. Two can be out at once — a relink match racing the
   // candidate's own Unlink is the one that matters — and whichever answered
   // last used to become the plan AND re-send the tab link. loadPlan resolves
   // false when a later load, or an Unlink, took over while it was out: `plan`
@@ -1923,7 +1957,7 @@
     paintPause();
     setStatusLine(paused
       ? 'Auto-fill paused in this tab — nothing fills or uploads by itself, even when the page reloads. The buttons below still work.'
-      : 'Auto-fill resumed — the next page load in this tab fills by itself again.');
+      : 'Resumed — a part of the form that appears right after you press ⚡, and the fill a finished Process starts, run again. Page loads still fill nothing by themselves.');
   }
 
   async function loadPlan(itemId = null) {
@@ -1953,7 +1987,7 @@
         : 'No pipeline match — profile-only plan (pick an application below if one applies).');
     // Establishing (or re-confirming) the tab link is what closes most of
     // item 8's "re-link on every Continue page" pain — see sw.js's
-    // maybeAutoRun relink path, which reads this back on later navigations.
+    // maybeAutoMatch relink path, which reads this back on later navigations.
     if (plan.mode === 'item' && plan.item) {
       send({ type: 'companion:setTabLink', item: plan.item.id, host: location.hostname });
     }
@@ -1969,7 +2003,7 @@
   const fillSummary = (suffix = '') => {
     const vals = [...rowStatus.values()];
     const done = vals.filter((s) => s === 'filled' || s === 'already').length;
-    return `Auto-fill: ${done} done, ${vals.length - done} left for you — review before submitting.${suffix ? ` ${suffix}` : ''}`;
+    return `Fill: ${done} done, ${vals.length - done} left for you — review before submitting.${suffix ? ` ${suffix}` : ''}`;
   };
 
   // Engine → panel
@@ -2005,34 +2039,38 @@
     clearTimeout(questionGather.settle);
     questionGather.settle = setTimeout(questionGather.finish, 1500);
   };
-  // Auto-run entry: the service worker matched this page to a queue item.
-  // `relink` (items 6/8): a tab already linked to an item navigated to a
-  // Continue/next-step page — sw.js's maybeAutoRun re-fetched THAT item's
-  // plan and asks for the deterministic fill only, never live-fill (the
-  // deliberate-AI rule holds across every navigation, not just the first
-  // load). `reopen` says whether the panel was visibly open before this
-  // navigation (chrome.storage.session's panelOpen) — when it was not, the
-  // panel is built (so plan/fill state exists) but stays OFF-SCREEN rather
-  // than popping open uninvited; the candidate can still open it any time and
-  // find the fill already done.
-  panelBus['companion:autorun'] = async (msg = {}) => {
+  // Match entry: the service worker matched this page to a queue item — or a
+  // tab linked to one navigated to its next page (`relink`, items 6/8, with
+  // sw.js's maybeAutoMatch having re-fetched THAT item's plan). The panel is
+  // built and the plan loaded, and that is all: nothing is filled and nothing
+  // is uploaded until the candidate presses ⚡ Fill everything on this page.
+  // Until 2026-10-29 both branches ran fillEverything() here, so a page load
+  // was enough to fill a form and attach a résumé — on a Continue page, and
+  // on whatever a still-linked tab showed next. `reopen` says whether the
+  // panel was visibly open before a relink navigation (chrome.storage.session's
+  // panelOpen) — when it was not, the panel is built (the plan is ready
+  // behind the toolbar icon) but stays OFF-SCREEN rather than popping open
+  // uninvited.
+  panelBus['companion:matched'] = async (msg = {}) => {
     if (running) return;
-    if (msg.relink) {
-      if (!host) buildPanel({ show: Boolean(msg.reopen) });
-      if (!(await loadPlan(msg.item))) return;
-      if (plan && plan.mode === 'item') fillEverything({ auto: true });
-      return;
+    if (!host) buildPanel({ show: msg.relink ? Boolean(msg.reopen) : true });
+    if (!(await loadPlan(msg.relink ? msg.item : null))) return;
+    if (plan && plan.mode === 'item') {
+      setStatusLine(msg.relink
+        ? `Still linked to ${plan.item.company} — ${plan.item.role}. Press ⚡ Fill everything for this page; nothing is filled by itself.`
+        : `Matched ${plan.item.company} — ${plan.item.role}. Review, then press ⚡ Fill everything; nothing is filled by itself.`);
     }
-    if (!host) buildPanel();
-    if (!(await loadPlan())) return;
-    if (plan && plan.mode === 'item') fillEverything({ auto: true });
   };
   // A form frame appeared after the fill ran (Greenhouse embeds, Apply-button
   // reveals) — replay the fill into THAT frame only. Broadcasting to every
   // frame would re-run the plan over forms the candidate has since edited;
   // the 'already' guards are the second line of defence, not the first.
+  // Only within LATE_FRAME_MS of the candidate's own ⚡ (lastFillAt): this
+  // replay is the one path left that fills without a click of its own, and a
+  // frame that mounts minutes later is not part of that click.
   panelBus['companion:frameAdded'] = async ({ frameId }) => {
-    if (!plan || !rowStatus.size || frameId == null || (await readAutoPause()) !== false) return;
+    if (!plan || !rowStatus.size || frameId == null || Date.now() - lastFillAt > LATE_FRAME_MS) return;
+    if ((await readAutoPause()) !== false) return;
     broadcast({ type: 'companion:runFill', plan, waitMs: 4000, ...autoScope }, frameId);
     if (resumeCache && rowStatus.get('resume') !== 'filled') {
       broadcast({ type: 'companion:attachResume', b64: resumeCache.b64, filename: resumeCache.filename, mime: resumeCache.mime, waitMs: 4000, ...autoScope }, frameId);
@@ -2077,17 +2115,19 @@
       true,
     );
   };
-  panelBus['companion:resumeAttached'] = ({ ok }) => {
+  panelBus['companion:resumeAttached'] = ({ ok, reason }) => {
     settleAttachWait('resume');
     rowStatus.set('resume', ok ? 'filled' : 'failed');
     paintStatuses();
-    setStatusLine(ok ? 'Resume attached — verify the file name shows on the form.' : 'Could not attach — use Download and add it manually.', !ok);
+    setStatusLine(ok ? 'Resume attached — verify the file name shows on the form.'
+      : reason === 'own-dashboard' ? OWN_DASHBOARD_MSG : 'Could not attach — use Download and add it manually.', !ok);
   };
-  panelBus['companion:coverLetterAttached'] = ({ ok }) => {
+  panelBus['companion:coverLetterAttached'] = ({ ok, reason }) => {
     settleAttachWait('cover_letter_file');
     rowStatus.set('cover_letter_file', ok ? 'filled' : 'failed');
     paintStatuses();
-    setStatusLine(ok ? 'Cover letter attached — verify the file name shows on the form.' : 'Could not attach — use Download and add it manually.', !ok);
+    setStatusLine(ok ? 'Cover letter attached — verify the file name shows on the form.'
+      : reason === 'own-dashboard' ? OWN_DASHBOARD_MSG : 'Could not attach — use Download and add it manually.', !ok);
   };
   // A frame's harvestForm() results — gathered the same way collectQuestions
   // gathers open questions (a settle window across every frame that answers).
@@ -2439,24 +2479,27 @@
   }
 
   // The one-click DETERMINISTIC path: fill fields + answers, attach the
-  // resume and cover letter. Auto-run calls this on a URL match, the
-  // multi-page relink calls it on every later Continue page, and the ⚡
-  // button is the manual trigger — all three run the exact same flow.
-  // Deliberately calls no model: drafting open questions is now the AI tab's
-  // own "Draft open questions" button, one explicit click, never bundled in
-  // here — no inference call may fire without the candidate having asked for
-  // it. Nothing here submits.
+  // resume and cover letter. The ⚡ button is the trigger. The one other
+  // caller is the fill a finished "Process this page" starts (`auto`), which
+  // the candidate asked for with their click on that very page moments
+  // earlier. No page load calls this: a URL match or a relink only opens the
+  // panel (panelBus['companion:matched']). Deliberately calls no model:
+  // drafting open questions is the AI tab's own "Draft open questions"
+  // button, one explicit click, never bundled in here — no inference call may
+  // fire without the candidate having asked for it. Nothing here submits.
   //
-  // A paused tab holds every automatic call (asked of the worker, not read off
-  // the button: an auto-run can reach a panel that has not loaded the mark
-  // yet), and so does one whose read failed or that a Pause overtook while the
-  // read was out; the ⚡ click still fills. Either way a Pause that lands while
-  // a file downloads stops the upload that would have followed it.
+  // A paused tab holds the automatic call (asked of the worker, not read off
+  // the button: it can reach a panel that has not loaded the mark yet), and
+  // so does one whose read failed or that a Pause overtook while the read was
+  // out; the ⚡ click still fills. Either way a Pause that lands while a file
+  // downloads stops the upload that would have followed it.
   async function fillEverything({ auto = false } = {}) {
     if (!plan || running) return;
     running = true;
     const gen = pauseGen;
     try {
+      // Never on the candidate's own dashboard, click or not.
+      if (await onOwnServerSite()) { setStatusLine(OWN_DASHBOARD_MSG, true); return; }
       if (auto) {
         const paused = await readAutoPause();
         if (paused !== false || gen !== pauseGen) {
@@ -2466,7 +2509,8 @@
           return;
         }
       }
-      setStatusLine(auto ? `Matched ${plan.item ? plan.item.company : 'this page'} — auto-filling…` : 'Filling…');
+      setStatusLine(auto ? `Ready for ${plan.item ? plan.item.company : 'this page'} — filling…` : 'Filling…');
+      lastFillAt = Date.now();
       broadcast({ type: 'companion:runFill', plan, waitMs: auto ? 8000 : 2500, ...autoScope });
       if (plan.resume && plan.resume.available) {
         const r = await getResume();
@@ -2676,9 +2720,9 @@
       if (!dot) continue;
       dot.style.background = status ? (DOT[status] || 'transparent') : 'var(--co-border)';
       const guessedText = clean(written).slice(0, 60);
-      dot.title = status === 'filled' ? 'auto-filled' : status === 'already' ? 'was already filled'
+      dot.title = status === 'filled' ? 'filled' : status === 'already' ? 'was already filled'
         : status === 'guessed' ? `best guess${guessedText ? `: "${guessedText}"` : ''} — please verify`
-          : status === 'failed' ? 'auto-fill failed — use Insert or Copy'
+          : status === 'failed' ? 'fill failed — use Insert or Copy'
             : status === 'notfound' ? 'field not found on this page — use Insert or Copy'
               : status === 'skipped' ? 'left for you — sensitive, unclear, or the model declined' : 'pending';
     }

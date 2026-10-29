@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CareerAutopilot Companion",
-  "version": "0.4.6",
-  "description": "Fills job application forms from your CareerAutopilot pipeline: auto-fill where possible, click-to-insert and copy everywhere else, an AI tab for live-fill and drafted answers (every call is a deliberate click). Never submits — you always click Submit.",
+  "version": "0.5.0",
+  "description": "Fills job application forms from your CareerAutopilot pipeline when you press Fill: the matched form in one click, click-to-insert and copy everywhere else, an AI tab for live-fill and drafted answers (every call is a deliberate click). Nothing fills or uploads on page load, and it never submits — you always click Submit.",
   "permissions": ["storage", "scripting", "activeTab", "webNavigation"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "sw.js" },

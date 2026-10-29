@@ -275,30 +275,37 @@ access to it.
 
 ## 3. Applying to a job
 
-The panel has three tabs — **Fill**, **AI**, **Generate message**. Only Fill
-ever runs by itself; nothing on the AI tab (or anywhere else) calls your
-fleet's model without you pressing its own button. Every AI button's tooltip
-says what it will do and that it costs one model call before you click it.
+The panel has three tabs — **Fill**, **AI**, **Generate message**. Nothing
+fills, uploads or calls a model by itself: a matched page opens the panel at
+most, and every fill is your click on **⚡ Fill everything**. Nothing on the AI
+tab (or anywhere else) calls your fleet's model without you pressing its own
+button. Every AI button's tooltip says what it will do and that it costs one
+model call before you click it.
 
-### Automatic (default)
+### On a matched page (default)
 
 Open the job's application page. If the URL matches an item in your active
-queue and the site is a known ATS, the panel **opens and fills itself** —
-contact fields, screening answers, cover letter (text *and*, where the form
-takes an attachment, the actual PDF file), resume attached. The toolbar icon
-shows a green ✓ on matched pages. Nothing is drafted automatically — drafting
-open questions is a button on the AI tab now, so it never fires without you
-asking. You review everything and click Submit yourself — the extension has no
-way to do that, ever.
+queue and the site is a known ATS, the panel **opens by itself with that item
+loaded** and the toolbar icon shows a green ✓. That is all a page load does.
+Press **⚡ Fill everything** and it fills contact fields, screening answers,
+the cover letter (text *and*, where the form takes an attachment, the actual
+PDF file) and attaches the resume — in one click, no model call. Nothing is
+filled or uploaded before that click: not on first load, not on the
+application's later pages, and never on your own dashboard, which the
+extension refuses to fill or upload to at all. Nothing is drafted
+automatically either — drafting open questions is a button on the AI tab. You
+review everything and click Submit yourself — the extension has no way to do
+that, ever.
 
-Turn pieces of this off in the extension options: auto-run, or widen it to
-non-ATS sites.
+Turn the opening off in the extension options ("Open the panel when a page
+matches a queue item"), or widen the matching to non-ATS sites.
 
 ### Multi-page applications ("Continue" / "Next step")
 
 Once a page is matched or linked, the extension remembers it for that browser
-tab: every later Continue/Next-step page in the **same** application
-re-fills itself automatically, without asking you to pick the item again. The
+tab: on every later Continue/Next-step page in the **same** application the
+panel arrives with that item already loaded, without asking you to pick it
+again — press **⚡ Fill everything** on each page; nothing fills by itself. The
 panel header shows **"Linked: Company — Role · Unlink"** whenever a link is
 active. The link is per-tab and clears itself once you submit, once the tab
 leaves the application's site, or when you close the tab — reopening the same
@@ -310,7 +317,7 @@ turns auto-link off for that tab: the extension stops matching the pages in
 that tab to your pipeline, on the page you are on and on every page you go to
 next, and the header says **"Auto-link is off in this tab"**. You get the list
 of your applications instead; pick the right one and the tab is linked to it,
-with auto-fill on its next steps as usual. If none applies, carry on from your
+and the panel stays on it for its next steps as usual. If none applies, carry on from your
 profile. **Turn back on** in the header undoes it. Other tabs are not
 affected, and a new tab starts with auto-link on.
 
@@ -319,18 +326,15 @@ application you unlinked, so submitting the form will not mark the wrong one
 as applied. If you submit without linking the right application, mark it on
 the dashboard.
 
-**⏸ Pause** in the panel header is for a form that fights the auto-fill — the
-usual sign is a page that reloads every time the resume is attached, so the
-fill runs again, attaches it again, and the page never sits still long enough
-to apply. Pause stops it in that tab: nothing fills or uploads by itself,
-including a fill or upload that was still waiting for its field, and it holds
-across reloads of the page. The header turns into **▶ Resume** and a notice
-under it says the tab is paused. ⚡ Fill everything and each row's Insert,
-Copy and Attach still work, so you can finish the form by hand; what the
-extension would do next by itself waits for you — the fill **＋ Process this
-page** starts when it finishes, and a part of the form that appears after you
-pressed ⚡ (press it again). The tab keeps its link, other tabs are not
-affected, and **▶ Resume** (or closing the tab) ends it.
+**⏸ Pause** in the panel header holds the two things the panel still does
+without a further click of yours: the fill a finished **＋ Process this page**
+starts, and the filling of a part of the form that appears within half a
+minute of your ⚡ (an embedded form frame that mounts late). A fill or upload
+still waiting for its field is dropped too, and the mark holds across reloads
+of the page. The header turns into **▶ Resume** and a notice under it says
+the tab is paused. ⚡ Fill everything and each row's Insert, Copy and Attach
+still work, so you can finish the form by hand. The tab keeps its link, other
+tabs are not affected, and **▶ Resume** (or closing the tab) ends it.
 
 ### Manual (fallback, and non-queue pages)
 
@@ -352,7 +356,7 @@ affected, and **▶ Resume** (or closing the tab) ends it.
    dashboard's **Ready for review** list.
 4. **Click ⚡ Fill everything.** It fills the fields, attaches the resume and
    cover letter, in one go — deterministic, no model call. Then read the
-   status line, e.g. *"Auto-fill: 7 done, 2 left for you — review before
+   status line, e.g. *"Fill: 7 done, 2 left for you — review before
    submitting."*
 5. **Work the leftovers.** Every field is a row with a coloured dot:
 
@@ -551,9 +555,9 @@ one just moves you down to the next:
 | **C** | Assisted insert — click field, press **Insert** | Anything scriptable |
 | **D** | **Copy** → paste yourself | Everything, Workday included |
 
-So auto-fill is not really the product — **the checklist is**. Auto-fill just
+So the one-click fill is not really the product — **the checklist is**. ⚡ just
 pre-completes as much of it as it can, and whatever it misses stays one click
-from done. A form where nothing auto-fills is still faster than typing from
+from done. A form where nothing fills is still faster than typing from
 scratch.
 
 Every **Insert** also copies to the clipboard as a silent backstop, so if no
@@ -564,9 +568,10 @@ field was focused you lose nothing — the panel tells you it copied instead.
 ## 5. When something goes wrong
 
 **"The panel didn't open by itself."**
-Auto-run needs three things: the auto-run toggle on (extension options), the
-page URL matching an active queue item, and the site being a recognised ATS
-host (or the "watch every site" toggle on). A branded careers domain that
+Opening on a match needs three things: the "Open the panel when a page matches
+a queue item" toggle on (extension options), the page URL matching an active
+queue item, and the site being a recognised ATS host (or the "watch every
+site" toggle on). It opens only — the fill is always your ⚡. A branded careers domain that
 isn't in the ATS host list won't trigger — open the panel manually (toolbar
 icon or Alt+Shift+C); everything else works the same.
 

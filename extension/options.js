@@ -41,11 +41,14 @@ async function load() {
     // never overwrites an existing value with its default) — drafting is now
     // a deliberate AI-tab button, never automatic, so a fresh profile should
     // not carry a stale "on" default forward. See options.html's copy.
-    baseUrl: '', token: '', autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false, bundledFingerprint: '',
+    // autoOpen replaced autoRun on 2026-10-29 (a match opens the panel; it no
+    // longer fills). null here means "not stored yet", so an install that had
+    // chosen autoRun keeps that choice as its autoOpen.
+    baseUrl: '', token: '', autoOpen: null, autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false, bundledFingerprint: '',
   });
   $('baseUrl').value = cfg.baseUrl;
   $('token').value = cfg.token;
-  $('autoRun').checked = cfg.autoRun;
+  $('autoOpen').checked = cfg.autoOpen === null ? Boolean(cfg.autoRun) : Boolean(cfg.autoOpen);
   $('autoDraft').checked = cfg.autoDraft;
   $('autoRunAll').checked = cfg.autoRunAll;
   $('learnFields').checked = cfg.learnFields;
@@ -60,7 +63,7 @@ $('save').addEventListener('click', async () => {
   await chrome.storage.local.set({
     baseUrl,
     token,
-    autoRun: $('autoRun').checked,
+    autoOpen: $('autoOpen').checked,
     autoDraft: $('autoDraft').checked,
     autoRunAll: $('autoRunAll').checked,
     learnFields: $('learnFields').checked,

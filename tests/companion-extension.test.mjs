@@ -240,7 +240,7 @@ const { setEnv, alreadyAnswered, frameTrusted, looksLikeSubmit, ATS_HOST_RE, CON
   // onHistoryStateUpdated both fire for one SPA load, and every await between
   // the check and the claim is a window for both to pass it.
   const claim = SW.indexOf('inflight.add(claim)');
-  const firstAwait = SW.indexOf('await', SW.indexOf('async function maybeAutoRun'));
+  const firstAwait = SW.indexOf('await', SW.indexOf('async function maybeAutoMatch'));
   ok(claim > 0 && claim < firstAwait,
     'auto-run claims its dedup key synchronously, before the first await (closes the double-fire race)');
   ok(/if \(!plan \|\| !plan\.ok\) return;/.test(SW),
@@ -1240,8 +1240,8 @@ export { findCoverLetterInput, findResumeInput, isAutofillFileInput };
   ok(/expectAttachAnswer\('resume', r\.filename\);\s*broadcast\(\{ type: 'companion:attachResume'/.test(COMPANION)
     && /expectAttachAnswer\('cover_letter_file', r\.filename\);\s*broadcast\(\{ type: 'companion:attachCoverLetter'/.test(COMPANION),
   'both manual Attach buttons wait for an answer before broadcasting');
-  ok(/panelBus\['companion:resumeAttached'\] = \(\{ ok \}\) => \{\s*settleAttachWait\('resume'\);/.test(COMPANION)
-    && /panelBus\['companion:coverLetterAttached'\] = \(\{ ok \}\) => \{\s*settleAttachWait\('cover_letter_file'\);/.test(COMPANION),
+  ok(/panelBus\['companion:resumeAttached'\] = \(\{ ok, reason \}\) => \{\s*settleAttachWait\('resume'\);/.test(COMPANION)
+    && /panelBus\['companion:coverLetterAttached'\] = \(\{ ok, reason \}\) => \{\s*settleAttachWait\('cover_letter_file'\);/.test(COMPANION),
   'an attach result from any frame settles the wait');
   {
     const timers = [];
@@ -1479,12 +1479,52 @@ export { paintFeatureGates };
   const fillEverythingSrc = extractFunction(COMPANION, 'fillEverything');
   ok(!/autoDraft/.test(fillEverythingSrc) && !/getDraft/.test(fillEverythingSrc) && !/liveFill/i.test(fillEverythingSrc),
     'fillEverything() (auto-run AND the ⚡ button) never calls drafting or live-fill — Fill is deterministic-only');
-  const autorunHandler = COMPANION.slice(
-    COMPANION.indexOf("panelBus['companion:autorun']"),
+  const matchedHandler = COMPANION.slice(
+    COMPANION.indexOf("panelBus['companion:matched']"),
     COMPANION.indexOf("panelBus['companion:frameAdded']"),
   );
-  ok(/fillEverything\(\{ auto: true \}\)/.test(autorunHandler) && !/fillLive\(/.test(autorunHandler),
-    'the auto-run handler (incl. its relink branch) calls only the deterministic fill, never fillLive — the AI tab\'s own click is the only way to trigger it');
+  ok(!/fillLive\(/.test(matchedHandler) && !/getDraft/.test(matchedHandler),
+    'the match handler (incl. its relink branch) never reaches a model — the AI tab\'s own click is the only way to trigger one');
+}
+
+// ── no page load fills: a match opens the panel, the candidate's ⚡ fills ──
+// Until 2026-10-29 a URL match and a multi-page relink both ran
+// fillEverything() on load, and a tab still linked to an application carried
+// that into whatever it showed next — the candidate's own dashboard included,
+// whose Profile tab's résumé uploader took the tailored PDF meant for an
+// employer in place of the master résumé. Filling and uploading are now the
+// candidate's click, everywhere, and the dashboard is refused outright.
+{
+  const matchedHandler = COMPANION.slice(
+    COMPANION.indexOf("panelBus['companion:matched']"),
+    COMPANION.indexOf("panelBus['companion:frameAdded']"),
+  );
+  ok(!/fillEverything\(|runFill|attachResume|attachCoverLetter/.test(matchedHandler) && /loadPlan\(/.test(matchedHandler),
+    'the match handler only builds the panel and loads the plan — no fill, no upload, on a first load or a relink');
+  ok(!SW.includes('companion:autorun') && !COMPANION.includes('companion:autorun'),
+    'the old auto-run message is gone from both sides');
+  const matchSrc = SW.slice(SW.indexOf('async function maybeAutoMatch'), SW.indexOf('// ── submission detection'));
+  ok(/companion:matched/.test(matchSrc) && !/fillEverything|runFill|attachResume|attachCoverLetter/.test(matchSrc),
+    'the worker\'s match path sends companion:matched and nothing that fills');
+  ok(/if \(await isOwnServerUrl\(url\)\) return;/.test(matchSrc) && /async function isOwnServerUrl\(url\)/.test(SW),
+    'the worker never looks up, badges or opens the panel on the configured server\'s own host (the dashboard)');
+  ok(/if \(await onOwnServerSite\(\)\) return results;/.test(extractFunction(COMPANION, 'runFill')),
+    'runFill fills nothing on the dashboard, strict or not');
+  const engine = COMPANION.slice(COMPANION.indexOf('chrome.runtime.onMessage.addListener('), COMPANION.indexOf('const panelBus = {}'));
+  ok((engine.match(/if \(await onOwnServerSite\(\)\) \{ toTop\(\{ type: 'companion:(?:resumeAttached|coverLetterAttached)', ok: false, frame: location\.hostname, reason: 'own-dashboard' \}\); return; \}/g) || []).length === 2,
+    'both file attaches refuse the dashboard and say why — the manual Attach button included');
+  ok(/if \(await onOwnServerSite\(\)\) \{ setStatusLine\(OWN_DASHBOARD_MSG, true\); return; \}/.test(extractFunction(COMPANION, 'fillEverything')),
+    'and ⚡ Fill everything itself refuses there');
+  ok(/case 'companion:getServerHost':\s*sendResponse\(\{ ok: true, host: hostOf\(\(await getConfig\(\)\)\.baseUrl\) \}\);/.test(SW),
+    'the worker answers the host alone, never the token');
+  const frameAdded = COMPANION.slice(COMPANION.indexOf("panelBus['companion:frameAdded'] = "), COMPANION.indexOf("panelBus['companion:inserted'] = "));
+  ok(/Date\.now\(\) - lastFillAt > LATE_FRAME_MS/.test(frameAdded) && /lastFillAt = Date\.now\(\);/.test(extractFunction(COMPANION, 'fillEverything')),
+    'the late-frame replay runs only within LATE_FRAME_MS of the candidate\'s own fill');
+  const options = readFileSync(join(ROOT, 'extension', 'options.html'), 'utf8');
+  ok(/id="autoOpen"/.test(options) && !/id="autoRun"/.test(options),
+    'the option is named for what it does: open the panel on a match, never fill');
+  ok(/autoOpen: null, autoRun: true/.test(SW) && /s\.autoOpen === null \? Boolean\(s\.autoRun\)/.test(SW),
+    'an install\'s stored autoRun choice carries over as autoOpen');
 }
 
 // ── SPEC3 item #1: a constrained input never receives a value it cannot hold ─
@@ -1708,9 +1748,11 @@ export { INPUT_FORMATS, coerceForInput, valueFitsInput, setNativeValue };
     'attachFile is guarded (a bad file/DataTransfer failure never throws out of the fill loop)');
 }
 
-// ── manifest: patch bump for the Unlink fix ────────────────────────────────
+// ── manifest: minor bump for the click-only fill ───────────────────────────
 // The version is how the candidate can tell, on chrome://extensions, that a
-// reload actually picked up a fix.
+// reload actually picked up a fix. 0.5.0: no page load fills or uploads any
+// more (2026-10-29) — a contract change, so a minor step, not a patch.
 {
-  ok(MANIFEST.version === '0.4.6', 'manifest version bumped to 0.4.6 for the panel\'s Pause');
+  ok(MANIFEST.version === '0.5.0', 'manifest version bumped to 0.5.0 for the click-only fill');
+  ok(/Nothing fills or uploads on page load/.test(MANIFEST.description), 'and the store description says so');
 }

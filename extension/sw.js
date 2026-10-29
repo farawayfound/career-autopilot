@@ -6,9 +6,13 @@
 const getConfig = () =>
   chrome.storage.local.get({ baseUrl: '', token: '' });
 
-// Behaviour toggles (options.html). autoRun: when a page matches an active
-// queue item, open the panel and fill without a click — deterministic only,
-// per the deliberate-AI rule; it never triggers a model call. autoDraft:
+// Behaviour toggles (options.html). autoOpen: when a page matches an active
+// queue item, badge the toolbar and open the panel with the item loaded — and
+// nothing more. Filling and uploading wait for the candidate's own click on
+// ⚡ Fill everything, on every page: since 2026-10-29 no page load fills a
+// form or attaches a file by itself, anywhere. The key was `autoRun`, which
+// did exactly that; a stored autoRun value is read as autoOpen's default so an
+// existing install keeps its choice. autoDraft:
 // LEGACY, no longer read by companion.js's fillEverything — drafting moved
 // to the AI tab's own explicit "Draft open questions" button so no inference
 // call ever fires without a click. Kept in storage/options only so an
@@ -19,8 +23,10 @@ const getConfig = () =>
 // confirms on application forms, so they can be prefilled next time. Default
 // OFF — deliberately opt-in, since this reads personal data off forms the
 // candidate fills in themselves.
-const getSettings = () =>
-  chrome.storage.local.get({ autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false });
+const getSettings = async () => {
+  const s = await chrome.storage.local.get({ autoOpen: null, autoRun: true, autoDraft: false, autoRunAll: false, learnFields: false });
+  return { ...s, autoOpen: s.autoOpen === null ? Boolean(s.autoRun) : Boolean(s.autoOpen) };
+};
 
 // ── configuration: the setup file ───────────────────────────────────────────
 // api() reads storage, but storage starts empty in every profile that loads
@@ -233,7 +239,7 @@ const markAutoRan = async (tabId, url) => {
   await sessionSet('autoRan', map);
 };
 
-// Same host-family test companion.js's frameTrusted/maybeAutoRun logic uses —
+// Same host-family test companion.js's frameTrusted/maybeAutoMatch logic uses —
 // duplicated here for the same reason TAXONOMY/CONFIRM_RE are duplicated (no
 // module system to share it from).
 const registrable = (h) => String(h || '').toLowerCase().split('.').slice(-2).join('.');
@@ -285,7 +291,7 @@ const setLiveFillNextSteps = async (tabId, value) => {
 // title at two employers) could not be undone at all. The tab now remembers
 // the decision. While the mark stands nothing links this tab by itself: a
 // plan load carries no URL to match (planFor) and a navigation starts no
-// auto-run (maybeAutoRun). Only the candidate ends it, by picking an
+// auto-run (maybeAutoMatch). Only the candidate ends it, by picking an
 // application (setTabLink) or by turning auto-link back on in the panel.
 // `item` is the application that was unlinked, so the picker never suggests
 // it straight back. Per tab, and gone with the tab or the browser session,
@@ -330,12 +336,12 @@ async function unlinkTab(tabId, item) {
 // submit tracking, and a relink already on its way to the next load can link
 // the tab again (the panel's item load re-sends setTabLink). While this mark
 // stands no page load in the tab starts an auto-run, linked or not
-// (maybeAutoRun), and the panel holds every fill it would start by itself.
+// (maybeAutoMatch), and the panel holds every fill it would start by itself.
 // Pausing also tells every frame, so a fill or upload still waiting for its
 // field stands down. Only the candidate's Resume or closing the tab ends it;
 // the link, if any, is left as it was. Read and written without sessionGet/
 // sessionSet's swallow, so it fails closed: a read that throws ends
-// maybeAutoRun in its catch, and a write that throws is a failed Pause.
+// maybeAutoMatch in its catch, and a write that throws is a failed Pause.
 const autoPausedOf = async (tabId) => Boolean((await chrome.storage.session.get({ autoPaused: {} })).autoPaused[tabId]);
 async function setAutoPause(tabId, paused) {
   const { autoPaused: m } = await chrome.storage.session.get({ autoPaused: {} });
@@ -400,17 +406,39 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   openPanel(tab || (await chrome.tabs.query({ active: true, currentWindow: true }))[0]);
 });
 
-// ── auto-run ─────────────────────────────────────────────────────────────────
+// ── auto-match ───────────────────────────────────────────────────────────────
 // When a page finishes loading on a known ATS host (or anywhere, if the user
 // opted in), ask the server whether the URL matches an active queue item. On a
-// match: badge the toolbar, inject, open the panel, and run the full fill
-// (fields + resume + drafted answers). Filling only — submitting stays with
-// the human, always.
+// match: badge the toolbar, inject, and open the panel with the item loaded.
+// That is all a page load may do. Filling and uploading happen on the
+// candidate's own click (⚡ Fill everything), on this page and on every later
+// page of the same application — a form never fills, and a résumé never
+// uploads, because a page was visited. Until 2026-10-29 a match ran the whole
+// fill, and a tab still linked to an application carried that into whatever
+// it showed next, the candidate's own dashboard included: its Profile tab's
+// résumé uploader took the tailored PDF meant for an employer, and a page that
+// merely looked like a form could have been fed the candidate's details
+// without a click. Submitting stays with the human, always.
 const ATS_HOST_RE = /(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|smartrecruiters\.com|jobvite\.com|icims\.com|bamboohr\.com|workable\.com|workablecdn\.com|recruitee\.com|teamtailor\.com|breezy\.hr|applytojob\.com|jazz\.co|pinpointhq\.com|dover\.com|rippling\.com|ripplinghq\.com|gem\.com)$/i;
 
 const hostMatches = (url) => {
   try { return ATS_HOST_RE.test(new URL(url).hostname); } catch { return false; }
 };
+
+// The companion's own dashboard — the host it is configured against — is
+// never an application form: no lookup, no badge, no panel, no fill, no
+// upload, whatever a page there looks like (its Profile tab holds the
+// candidate's MASTER résumé upload). Hostname only, www. ignored: a
+// self-hoster's server and a page on the same host at another port are the
+// same place, and nothing on it is an employer's form. The engines check the
+// same host on their side (companion.js onOwnServerSite), so a click does not
+// get past it either.
+const hostOf = (url) => { try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
+async function isOwnServerUrl(url) {
+  const { baseUrl } = await getConfig();
+  const own = hostOf(baseUrl);
+  return Boolean(own) && hostOf(url) === own;
+}
 
 // tabs.onUpdated and webNavigation.onHistoryStateUpdated routinely both fire
 // for the same SPA load. The persisted autoRan check sits behind an await, so
@@ -419,7 +447,7 @@ const hostMatches = (url) => {
 // window; the persisted record closes the worker-restart window.
 const inflight = new Set();
 
-async function maybeAutoRun(tabId, url) {
+async function maybeAutoMatch(tabId, url) {
   if (!/^https?:/.test(url || '')) return;
   const claim = `${tabId}\n${url}`;
   if (inflight.has(claim)) return;
@@ -428,14 +456,17 @@ async function maybeAutoRun(tabId, url) {
     // A paused tab starts nothing, before either path below looks anything up.
     // Unrecorded, like an unlinked tab, so Resume finds the page as it was.
     if (await autoPausedOf(tabId)) return;
+    // The candidate's own dashboard: nothing, linked or not (isOwnServerUrl).
+    if (await isOwnServerUrl(url)) return;
     // Multi-page relink (items 6/8), checked BEFORE the ordinary URL-match
     // gate below: a tab already linked to a queue item re-fetches THAT
     // item's plan on every navigation, so a Continue/next-step page never
-    // asks the candidate to re-link. This is independent of autoRun/
+    // asks the candidate to re-link. This is independent of autoOpen/
     // autoRunAll — once a candidate has linked a page (deliberately, or via
-    // the URL-match gate once), later steps of the SAME application keep
-    // filling regardless of those settings, the same way a manually opened
-    // panel would.
+    // the URL-match gate once), later steps of the SAME application keep the
+    // panel on that item regardless of those settings. Keep, not fill: each
+    // page is filled by the candidate's own ⚡; the panel merely arrives with
+    // the right item loaded.
     const link = await tabLinkOf(tabId);
     if (link && link.item) {
       let stillLinked = hostMatches(url);
@@ -453,7 +484,7 @@ async function maybeAutoRun(tabId, url) {
           if (!current || current.item !== link.item || await autoPausedOf(tabId)) return;
           await injectCompanion(tabId);
           const reopen = await panelOpenOf(tabId);
-          await chrome.tabs.sendMessage(tabId, { type: 'companion:autorun', relink: true, item: link.item, reopen }, { frameId: 0 }).catch(() => {});
+          await chrome.tabs.sendMessage(tabId, { type: 'companion:matched', relink: true, item: link.item, reopen }, { frameId: 0 }).catch(() => {});
           return;
         }
         // A 404 means the item itself is gone (deleted, or no longer owned
@@ -476,8 +507,8 @@ async function maybeAutoRun(tabId, url) {
     // Unrecorded on purpose, so the page is looked up as usual once they turn
     // auto-link back on.
     if (await autoLinkOffOf(tabId)) return;
-    const { autoRun, autoRunAll } = await getSettings();
-    if (!autoRun) return;
+    const { autoOpen, autoRunAll } = await getSettings();
+    if (!autoOpen) return;
     if (await autoRanUrl(tabId) === url) return;
     if (!autoRunAll && !hostMatches(url)) return;
     const plan = await api(`/api/companion/plan?url=${encodeURIComponent(url)}`);
@@ -492,9 +523,9 @@ async function maybeAutoRun(tabId, url) {
     } catch { /* tab already gone */ }
     if (plan.mode !== 'item') return;
     await injectCompanion(tabId);
-    await chrome.tabs.sendMessage(tabId, { type: 'companion:autorun' }, { frameId: 0 });
+    await chrome.tabs.sendMessage(tabId, { type: 'companion:matched' }, { frameId: 0 });
   } catch (err) {
-    console.warn('companion auto-run failed', err);
+    console.warn('companion auto-match failed', err);
   } finally {
     inflight.delete(claim);
   }
@@ -656,14 +687,14 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'complete') {
     probeSubmitLanding(tabId, tab.url || '').catch(() => {});
-    maybeAutoRun(tabId, tab.url || '');
+    maybeAutoMatch(tabId, tab.url || '');
   }
 });
 // SPA ATSes (Ashby, Workday) navigate via pushState — no 'complete' event.
 chrome.webNavigation.onHistoryStateUpdated.addListener(({ tabId, frameId, url }) => {
   if (frameId !== 0) return;
   probeSubmitLanding(tabId, url).catch(() => {});
-  maybeAutoRun(tabId, url);
+  maybeAutoMatch(tabId, url);
 });
 // ATS forms often live in iframes mounted AFTER page load (Greenhouse embeds,
 // "Apply" buttons that reveal the form). Late frames get the engine injected,
@@ -852,6 +883,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       case 'companion:getSettings':
         sendResponse(await getSettings());
+        break;
+      // The host the companion is configured against, for every frame's own
+      // dashboard check (companion.js onOwnServerSite) — the host alone,
+      // never the token.
+      case 'companion:getServerHost':
+        sendResponse({ ok: true, host: hostOf((await getConfig()).baseUrl) });
         break;
       // Options page (and setup's verification pass): re-read the setup file.
       // `force` makes the file win over whatever storage holds — the repair

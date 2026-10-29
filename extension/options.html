@@ -36,8 +36,8 @@
   <div class="hint">Create one on your dashboard's Career → Companion tab, or use <code>server.token</code> from your own autopilot config if you self-host.</div>
 
   <h3>Automation</h3>
-  <label class="check"><input id="autoRun" type="checkbox"> Auto-fill when a page matches a queue item</label>
-  <div class="hint">On known ATS pages, the panel opens and fills by itself the moment the URL matches an active pipeline item. Submitting is always left to you. Manual triggers still work: the toolbar icon or <kbd>Alt+Shift+C</kbd>.</div>
+  <label class="check"><input id="autoOpen" type="checkbox"> Open the panel when a page matches a queue item</label>
+  <div class="hint">On known ATS pages, the panel opens by itself with the matched item loaded the moment the URL matches an active pipeline item. It never fills or uploads anything by itself: filling is always your click on ⚡ Fill everything, on every page of an application, and never on your own dashboard. The toolbar icon or <kbd>Alt+Shift+C</kbd> open the panel anywhere.</div>
   <label class="check"><input id="autoDraft" type="checkbox"> (legacy) Draft answers automatically during a fill</label>
   <div class="hint">No longer used — drafting is now a deliberate click, "Draft open questions" in the panel's AI tab, so it never fires a model call without you asking for it. This toggle is kept only so an existing install's stored value round-trips; new installs default it off.</div>
   <label class="check"><input id="autoRunAll" type="checkbox"> Watch every site, not just known ATS hosts</label>

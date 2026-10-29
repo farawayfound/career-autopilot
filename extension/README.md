@@ -24,8 +24,8 @@ One panel, four tiers — failure never dead-ends, it just moves down a rung:
 | C | Assisted insert — click the field, press **Insert** | Anything scriptable |
 | D | **Copy** → paste yourself | Everything (Workday included) |
 
-Auto-fill pre-completes the checklist; whatever it missed stays one click from
-done. Every Insert also copies to the clipboard as a backstop.
+**⚡ Fill everything** pre-completes the checklist; whatever it missed stays one
+click from done. Every Insert also copies to the clipboard as a backstop.
 
 ## Launch (double-click)
 
@@ -94,11 +94,13 @@ repeated in the closing summary.
 
 ## Use
 
-**Automatic (default):** open a job application page. If the URL matches an
-active queue item on a known ATS host, the panel opens and fills everything by
-itself — fields, screening answers, cover letter, resume attached, and local-model
-drafts for open free-text questions. Review, then click Submit yourself.
-Toggles in the extension options (auto-run / auto-draft / watch-all-sites).
+**On a matched page (default):** open a job application page. If the URL
+matches an active queue item on a known ATS host, the panel opens by itself
+with that item loaded — and stops there. Nothing is filled and nothing is
+uploaded until you press **⚡ Fill everything**: not on first load, not on the
+application's later pages, and never on your own dashboard, which the
+extension refuses to fill at all. Review, then click Submit yourself. Toggles
+in the extension options (open-on-match / watch-all-sites).
 
 **Manual (fallback / non-queue pages):**
 
