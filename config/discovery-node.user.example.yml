@@ -182,7 +182,7 @@ boards:
   # `fn` to the function you want (engineering, research, product, design,
   # sales, marketing, …).
   - { name: a16z speedrun talent network, provider: a16z-speedrun-talent, max_pages: 6,
-      filters: { fn: engineering, posted: 7d, sort: new, scope: everywhere } }
+      filters: { fn: engineering, sen: "senior,staff,_", posted: 7d, sort: new, scope: everywhere } }
   # JazzHR's global feed. OFF: the first run downloads about 20 MB (then it is
   # kept for a day) and the listings carry little more than a link. To use it,
   # remove the leading # from the entry below.
