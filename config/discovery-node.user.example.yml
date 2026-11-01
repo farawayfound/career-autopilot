@@ -212,5 +212,5 @@ rank:
   local_terms: []
   remote_us_terms: [United States, USA, "U.S.", "US-", Americas, North America]
   floor_usd: null
-  weights: { title_primary: 25, title_secondary: 12, seniority: 15, local: 20, remote_us: 15, authorized_location: 12, sponsor_required_location: 6, comp_at_or_above_floor: 15, fresh_3d: 8, fresh_14d: 4, ats_direct: 5, tracked_company: 5, stack_match_max: 15, pref_work_location_match: 8, pref_sponsorship_offered: 8, pref_sponsorship_unstated: 0 }
+  weights: { title_primary: 25, title_secondary: 12, seniority: 5, local: 20, remote_us: 15, authorized_location: 12, sponsor_required_location: 6, comp_at_or_above_floor: 15, fresh_3d: 8, fresh_14d: 4, ats_direct: 5, tracked_company: 5, stack_match_max: 15, pref_work_location_match: 8, pref_sponsorship_offered: 8, pref_sponsorship_unstated: 0 }
   penalties: { non_us_only: -25, entry_or_intern: -40, stale_45d: -10, trust_flagged: -15, comp_below_floor: -20, pref_work_location_mismatch: -20, pref_relocation_required: -15, pref_travel_exceeds: -10 }

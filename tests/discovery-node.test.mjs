@@ -5,8 +5,8 @@
 // touch to the real repo's config/portals.yml/pipeline.md.
 //
 // See DISCOVERY_NODE_SPEC.md §2/§4 for the contract under test.
-import { pass, fail } from './helpers.mjs';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { pass, fail, ROOT } from './helpers.mjs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -105,6 +105,9 @@ const RANK = {
   local_terms: ['Denver', 'Colorado', 'Aurora', 'CO,'],
   remote_us_terms: ['United States', 'USA', 'U.S.', 'US-', 'Americas', 'North America'],
   floor_usd: null,
+  // The weights are a fixture, not the shipped defaults: seniority is 15 here
+  // (the default until 2026-10-31, now 5) so the arithmetic below keeps its
+  // meaning. "the shipped example's weights" further down reads the real ones.
   weights: { title_primary: 25, title_secondary: 12, seniority: 15, local: 20, remote_us: 15, comp_at_or_above_floor: 15, fresh_3d: 8, fresh_14d: 4, ats_direct: 5, tracked_company: 5, stack_match_max: 15 },
   penalties: { non_us_only: -25, entry_or_intern: -40, stale_45d: -10, trust_flagged: -15, comp_below_floor: -20 },
 };
@@ -616,15 +619,27 @@ const baseRow = () => ({ url: 'https://example.com/careers/1', company: '', titl
 }
 
 {
-  console.log('\n  one-directional primary title match');
+  // Since 2026-10-31 the level word is not part of the role: the profile's
+  // "Senior Software Engineer" is the role "software engineer", and a posting
+  // naming that role is a primary match whatever level its title claims —
+  // titles inflate from one company to the next. Still one direction: a title
+  // that merely shares words with a role is not a match.
+  console.log('\n  primary title match: the role, not its level word');
   const primary = ['Senior Software Engineer', 'Senior Platform Engineer'];
   const ctx = { criteria: { titleFilter: { positive: ['software engineer', 'platform engineer'] }, targetRoles: { primary, archetypeNames: [] }, floorUsd: 150000 }, rank: RANK };
   const plain = scoreFind({ ...baseRow(), title: 'Software Engineer', location: 'Remote, United States' }, ctx);
-  ok(plain.reasons.includes('title_secondary') && !plain.reasons.includes('title_primary'), 'a bare "Software Engineer" is secondary, not primary, against "Senior Software Engineer"');
-  eq(decideFind(plain, 40).decision, 'hold', 'a bare remote "Software Engineer" with unknown comp no longer ships on title + remote alone');
+  ok(plain.reasons.includes('title_primary'), 'a bare "Software Engineer" is a primary match for "Senior Software Engineer"');
+  const graded = scoreFind({ ...baseRow(), title: 'Software Engineer II - Builder Experience - Platform Engineering Productivity', location: 'Remote, United States' }, ctx);
+  ok(graded.reasons.includes('title_primary') && !graded.reasons.includes('seniority'),
+    'so is "Software Engineer II - Builder Experience" (row #838), with no seniority bonus for its grade');
   const senior = scoreFind({ ...baseRow(), title: 'Senior Software Engineer II, Platform', location: 'Remote, United States' }, ctx);
-  ok(senior.reasons.includes('title_primary') && senior.reasons.includes('seniority'), 'a title that CONTAINS the primary role is primary (and senior)');
+  ok(senior.reasons.includes('title_primary') && senior.reasons.includes('seniority'), 'a senior-titled posting is primary too, and earns the seniority tie-break');
   eq(decideFind(senior, 40).decision, 'ship', 'the senior remote role ships');
+  const sharesWords = scoreFind({ ...baseRow(), title: 'Software Developer', location: 'Remote, United States' }, ctx);
+  ok(!sharesWords.reasons.includes('title_primary'), 'a title that only shares a word with a role ("Software Developer") is not primary');
+  const oneWord = scoreFind({ ...baseRow(), title: 'Mechanical Engineer', location: 'Remote, United States' },
+    { ...ctx, criteria: { ...ctx.criteria, targetRoles: { primary: ['Senior Engineer'], archetypeNames: [] } } });
+  ok(!oneWord.reasons.includes('title_primary'), 'a target that would shrink to one generic word ("Senior Engineer") keeps its level');
 }
 
 {
@@ -668,14 +683,32 @@ const baseRow = () => ({ url: 'https://example.com/careers/1', company: '', titl
   'fans a "Senior/Staff" level out, drops secondary-fit and level-less archetypes');
   const ctx = { criteria: { titleFilter: { positive: ['ai/ml engineer'] }, targetRoles: { primary: [], archetypeNames: archetypeRoleNames([{ name: 'AI/ML Engineer', level: 'Senior/Staff', fit: 'primary' }]) }, floorUsd: 150000 }, rank: RANK };
   const bare = scoreFind({ ...baseRow(), title: 'AI/ML Engineer', location: 'Remote, United States' }, ctx);
-  ok(!bare.reasons.includes('title_primary'), 'a bare archetype-named title is not a primary match');
-  eq(decideFind(bare, 40).decision, 'hold', 'a bare archetype-named remote role with unknown comp holds');
+  ok(bare.reasons.includes('title_primary'), 'a bare archetype-named title is a primary match (scoreFind compares without the level word)');
   const senior = scoreFind({ ...baseRow(), title: 'Staff AI/ML Engineer', location: 'Remote, United States' }, ctx);
-  ok(senior.reasons.includes('title_primary'), 'the level-prefixed title is a primary match');
+  ok(senior.reasons.includes('title_primary'), 'and so is the level-prefixed title');
 }
 
 {
-  console.log('\n  seniority weight: a Staff-titled positive-keyword remote role ships on its own');
+  console.log('\n  the shipped example\'s weights: seniority is a tie-break, the role decides');
+  // The fleet example (config/discovery-node.example.yml) is deliberately kept
+  // out of the public package, which runs this same file: there the user
+  // example stands in for both, so the check still runs against what the
+  // package ships instead of dying on ENOENT (as it did from #192 until now).
+  const fleetExample = join(ROOT, 'config', 'discovery-node.example.yml');
+  const userShipped = yaml.load(readFileSync(join(ROOT, 'config', 'discovery-node.user.example.yml'), 'utf-8')).rank;
+  const shipped = existsSync(fleetExample) ? yaml.load(readFileSync(fleetExample, 'utf-8')).rank : userShipped;
+  ok(shipped.weights.seniority < shipped.weights.title_secondary && userShipped.weights.seniority === shipped.weights.seniority,
+    `both example configs weigh a seniority word (${shipped.weights.seniority}) below any title match (${shipped.weights.title_secondary})`);
+  const ctx = { criteria: { titleFilter: { positive: ['software engineer'] }, targetRoles: { primary: ['Senior Software Engineer'], archetypeNames: [] }, floorUsd: 150000 }, rank: { ...RANK, weights: shipped.weights } };
+  const atsRow = { ...baseRow(), url: 'https://boards.greenhouse.io/elastic/jobs/8154426', location: 'Remote, United States' };
+  const graded = scoreFind({ ...atsRow, title: 'Software Engineer II - Builder Experience' }, ctx);
+  const senior = scoreFind({ ...atsRow, title: 'Senior Software Engineer - Builder Experience' }, ctx);
+  eq(decideFind(graded, 40).decision, 'ship', `a remote "Software Engineer II" from an ATS board ships (score ${graded.score})`);
+  eq(senior.score - graded.score, shipped.weights.seniority, 'and the senior-titled twin outranks it by the seniority weight alone');
+}
+
+{
+  console.log('\n  seniority weight (fixture 15): a Staff-titled positive-keyword remote role ships on its own');
   const ctx = { criteria: { titleFilter: { positive: ['platform engineer'] }, targetRoles: { primary: ['Senior Software Engineer'], archetypeNames: [] }, floorUsd: 150000 }, rank: RANK };
   const staff = scoreFind({ ...baseRow(), title: 'Staff Platform Engineer', location: 'Remote - United States' }, ctx);
   ok(staff.reasons.includes('title_secondary') && staff.reasons.includes('seniority') && staff.reasons.includes('remote_us'), 'Staff Platform Engineer: secondary + seniority + remote_us');

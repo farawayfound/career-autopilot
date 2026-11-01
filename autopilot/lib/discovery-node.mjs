@@ -697,6 +697,19 @@ function normText(s) {
   return String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+// Level words are not part of a role's name: "Senior Software Engineer" and
+// "Lead AI Engineer" are the roles "software engineer" and "ai engineer" at a
+// level, and "Software Engineer II" is the first at a grade. Whole words only,
+// so the "i" in "ai" and the "lead" in "leader" are never touched. A name the
+// strip would leave as one word ("Senior Engineer" → "engineer") keeps its
+// level: one generic word would match nearly every title on the board.
+const LEVEL_WORDS_RE = /(?<![\p{L}\p{N}])(?:senior|sr|staff|principal|lead|junior|jr|mid-level|mid|associate|distinguished|i{1,3}|iv|v)\.?(?![\p{L}\p{N}])/gu;
+export function stripLevelWords(name) {
+  const stripped = String(name ?? '').replace(LEVEL_WORDS_RE, ' ')
+    .replace(/\s+/g, ' ').replace(/^[\s,/&-]+|[\s,/&-]+$/g, '').trim();
+  return stripped.split(' ').length >= 2 ? stripped : String(name ?? '').trim();
+}
+
 function compileKeywordList(list, compileFn) {
   return (Array.isArray(list) ? list : [])
     .filter((k) => typeof k === 'string')
@@ -816,15 +829,18 @@ export function scoreFind(row, ctx = {}) {
   const targetRoleNames = [
     ...(ctx.criteria?.targetRoles?.primary || []),
     ...(ctx.criteria?.targetRoles?.archetypeNames || []),
-  ].map(normText).filter(Boolean);
-  // ONE direction only: the posting title must contain the target role name
-  // ("Senior Software Engineer II" ⊇ "Senior Software Engineer"). The reverse
-  // ("Software Engineer" ⊂ "Senior Software Engineer") is deliberately NOT a
-  // primary match — the profile's primary list carries the seniority on
-  // purpose, and with the shipped weights a plain remote "Software Engineer"
-  // (title_primary 25 + remote_us 15) landed exactly on ship_min_score 40
-  // with unknown comp and no seniority signal at all. Such a title still
-  // earns title_secondary through portals.yml's positive keywords.
+  ].map((n) => stripLevelWords(normText(n))).filter(Boolean);
+  // The posting title must contain the target ROLE, its level words removed:
+  // "Senior Software Engineer" in the profile is the role "software engineer"
+  // at a level, and "Software Engineer II - Builder Experience" names that
+  // role. Until 2026-10-31 the level word had to appear too, so that title —
+  // a mid-to-senior posting the candidate reached interviews for — earned 12
+  // where "Senior Software Engineer, anything" earned 40. Titles inflate and
+  // deflate from one company to the next ("II" at one is "Senior" at
+  // another), so the level is the triage model's call, read from the duties;
+  // the `seniority` weight below is a tie-break. Still ONE direction: a title
+  // that merely shares words with a role ("Platform Engineer" for "Senior
+  // Software Engineer") is not a primary match.
   const matchesTargetRole = Boolean(lowerTitle) && targetRoleNames.some((n) => lowerTitle.includes(n));
   const titlePositive = compileKeywordList(ctx.criteria?.titleFilter?.positive, compilePositiveKeyword);
   const titleNegative = compileKeywordList(ctx.criteria?.titleFilter?.negative, compileKeyword);
@@ -1090,11 +1106,10 @@ export function decideFind(scored, shipMinScore = 40) {
  * The strings a posting title must CONTAIN to count as a primary match, from
  * the profile's `target_roles.archetypes`. Only `fit: primary` archetypes,
  * and each one prefixed with its level ("Senior/Staff" fans out to "Senior …"
- * and "Staff …") — because the primary list carries its seniority word by
- * convention ("Senior Software Engineer") while an archetype keeps it in a
- * separate `level` field, a bare archetype name would let a non-senior
- * posting earn title_primary and, with remote_us, ship on those two signals
- * alone — the exact loophole the one-directional match closed for `primary`.
+ * and "Staff …"). scoreFind compares them with the level words removed since
+ * 2026-10-31 (stripLevelWords), so the prefix no longer decides a match; it
+ * is kept because these strings travel in the hub's criteria payload, and a
+ * node still running the older scoreFind reads them as before.
  * The name itself stays as written; an archetype phrased "AI Platform / LLMOps
  * Engineer" will rarely appear verbatim in a title, which is the safe
  * direction (title_secondary through the positive keywords still applies).
